@@ -2,3 +2,8 @@
 .claude/walkthroughs/
 
 .DS_Store
+
+node_modules/
+dist/
+*.log
+.vitest-cache/
