@@ -1,7 +1,28 @@
 {
-  "name": "hex",
+  "name": "@hexology/hex",
   "version": "0.1.0",
   "description": "Scaffolding tool that assembles applications from templated components — honeycomb-style.",
+  "keywords": [
+    "scaffolding",
+    "scaffold",
+    "generator",
+    "template",
+    "components",
+    "monorepo",
+    "cli",
+    "hex",
+    "hexology"
+  ],
+  "homepage": "https://github.com/jarecsni/hex#readme",
+  "bugs": {
+    "url": "https://github.com/jarecsni/hex/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/jarecsni/hex.git"
+  },
+  "author": "Johnny Jarecsni",
+  "license": "MIT",
   "type": "module",
   "bin": {
     "hex": "./dist/cli.js"
@@ -25,6 +46,9 @@
     "format": "biome format --write src test",
     "check": "npm run typecheck && npm run lint && npm run test"
   },
+  "publishConfig": {
+    "access": "public"
+  },
   "dependencies": {
     "commander": "^12.1.0",
     "picocolors": "^1.1.1"
@@ -37,6 +61,5 @@
     "typescript": "^5.7.2",
     "vitest": "^2.1.8"
   },
-  "license": "MIT",
   "private": true
 }

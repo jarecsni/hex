@@ -1,8 +1,10 @@
-# hex
+# @hexology/hex
 
-Scaffolding tool that assembles applications from templated components — honeycomb-style.
+Scaffolding tool that assembles applications from templated components — honeycomb-style. Part of the [Hexology](https://github.com/jarecsni/hex) toolset.
 
-Status: **0.1.0 — CLI scaffold only.** No render, no recipes yet. See [`idea.md`](./idea.md) for the design and [`CHANGELOG.md`](./CHANGELOG.md) for what's in.
+Status: **0.1.0 — CLI scaffold only, not yet published.** No render, no recipes yet. See [`idea.md`](./idea.md) for the design and [`CHANGELOG.md`](./CHANGELOG.md) for what's in.
+
+Once published you'll install with `npm install -g @hexology/hex` and run `hex`.
 
 ## Try it
 

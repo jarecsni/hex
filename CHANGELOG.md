@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Package renamed from `hex` to `@hexology/hex`. The `@hexology` scope is reserved for related tools (CLI, future component libraries, marketplace client). The bin command remains `hex`.
+
 ## [0.1.0] — 2026-04-25
 
 ### Added
