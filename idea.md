@@ -8,13 +8,15 @@ A scaffolding tool that assembles applications from pluggable **components** und
 
 ## Vocabulary
 
-- **Component** — an application subsystem (API, DB, auth, UI shell, …), published as a package and fetched by Hex from its repo or, preferably, from the marketplace. Versioned.
-- **Template** — the project-scaffolding files a component contributes. Lives under `template/` inside the component repo.
-- **Recipe** — a manifest describing an application type as a combination of components.
-- **Marketplace / catalogue** — an npmjs-style registry where devs register and version components. Own package format TBD.
-- **Application** — the generated project, retaining enough metadata (what components at what versions, what recipe, what answers) to be upgraded later.
+- **Component** — the only artifact type in Hex. A self-contained, templated subproject (API, DB, auth, UI shell, …) with a manifest, a `template/` folder, hooks, and migrations. Published and versioned. Fetched by Hex from a repo or the marketplace.
+- **Template** — the scaffolding files inside a component, under `template/`. Substitutes user answers into file contents *and* file / directory names.
+- **Recipe** — the **role** a component plays when its manifest declares `composes:` (a list of other components). A recipe owns the root-level orchestration files (`docker-compose.yml`, root `package.json` for workspaces, root README, …); its composed children own their own subtrees. Recipes are **not a separate artifact type** — they live in the marketplace alongside leaf components and use the same publish / version / upgrade flow.
+- **Marketplace / catalogue** — an npmjs-style registry where devs register and version components (leaf or composing). Own package format TBD.
+- **Application** — the generated project: the recipe component's root-orchestration tree plus its children's subtrees, retaining enough metadata to be upgraded.
 
 ## Component repo layout (draft)
+
+The shape is the same for leaf components and recipes (composing components):
 
 ```
 my-component/
@@ -22,12 +24,14 @@ my-component/
   hooks/             # customisation hooks (pre/post generate, pre/post upgrade, ...)
   migrations/        # version-to-version migration scripts (upgrade story)
   deploy/            # pluggable deployment hook
-  <manifest>         # component meta: version, prompts, kind/slot, deps, ...
+  <manifest>         # version, prompts, kind, provides/consumes, composes (if recipe), ...
 ```
 
 ## Principles
 
 - **Not fire-and-forget**: apps remember how they were built so newer component versions can be re-applied.
+- **Components are self-contained subprojects** — each owns its own subtree of the generated app and never writes outside it. Cross-component "central wiring" lives in the **recipe** (a composing component) which owns the root-level orchestration files.
+- **One artifact type, uniform marketplace** — leaf and composing components share the same repo layout, manifest shape, publish flow, versioning, and upgrade engine. "Recipe" is a role, not a type.
 - **Pluggable components** — recipes can swap one component for another of the same kind, or **stub** it.
 - **Stubbing reuses existing stub engines**; Hex defines integration points, doesn't build engines.
 - **Pluggable deployment from day one** — contract in place even though we won't ship many plugins at start.
@@ -82,33 +86,84 @@ At recipe resolve time Hex validates: every `consumes` slot has at least one `pr
 
 Feeds Thread 1: migration scripts can target the declared contract rather than touching component internals, so unrelated components upgrading independently don't collide.
 
+### 3. Composition — recipes are composing components
+
+Components are self-contained: each owns one subtree and never writes outside it. There are no shared files (no `package.json` mutated by three components). Cross-component glue lives in a **recipe** — a composing component whose manifest declares `composes:` listing its children.
+
+Same artifact type for both:
+
+```yaml
+# leaf
+name: api-express
+version: 1.2.0
+kind: api
+provides: [HTTP_PORT, api_routes_dir]
+prompts:
+  - port: { default: 3000 }
+```
+
+```yaml
+# recipe (composing component)
+name: fullstack-monorepo
+version: 1.0.0
+composes:
+  api: api-express@^1.0
+  db: db-postgres@^2.0
+  ui: ui-react@^3.0
+prompts:
+  - app_name: { required: true }
+  - containerize: { default: true }
+```
+
+The recipe owns the root-level orchestration files via its own `template/` (`docker-compose.yml`, root `package.json` for workspaces, root README, …). Each child fills its own subdirectory. Default subdirectory names come from the recipe's `composes:` keys; the user can override at prompt time.
+
+Recipes can compose other recipes — recursion is free.
+
+Versioning interacts naturally with Section 1: a recipe at v1.2 pins specific child versions; bumping the recipe to v1.3 may bump children, which kicks off transitive upgrades through the same engine. Conceptually like `npm update` of a top-level package.
+
+### 4. Templating engine — Nunjucks (Jinja2 for JS)
+
+One engine, applied to both file contents and file / directory names. Nunjucks gives:
+
+- Variable substitution: `{{ project_name }}`.
+- Conditionals: `{% if hasAuth %}` — needed because manifest-level "include this file or not" can't carry every case (you'll often want to switch a code block on/off inside an otherwise-unconditional file).
+- Loops: `{% for entity in entities %}` — needed for codegen.
+- Filters: `pluralize`, `camelCase`, `snake_case` — huge for codegen.
+- Template inheritance + macros — lets a component share boilerplate across its own files.
+- **Sandbox mode** — no arbitrary code execution from marketplace components.
+
+Bonus alignment: Cookiecutter and Copier both use Jinja2. Component authors familiar with either are at home immediately, and their templates are studyable as references.
+
+Conditional **file** inclusion (e.g. emit `Dockerfile` only if `containerize: true`) lives at the **manifest level**, not via `{% if %}` wrapping a whole file — cleaner, and easier to reason about during upgrade.
+
+### 5. Prompts — recipe-level + component-level
+
+Both layers are real. UX flow:
+
+1. Recipe-level prompts first (project name, license, target environment, `containerize`, …).
+2. Then component sections in turn ("Configuring `api-express`…").
+3. Components can read recipe-level answers (so a child can branch on `containerize`).
+4. Components can see which siblings are present in the recipe (so an `api` component can branch on whether `auth` is in play, for example).
+
+Refinement TBD: exact shape of the templating context — namespacing of recipe vs. component answers and of sibling-presence facts. Treat as a refinement, not a blocker.
+
 ## Open threads
 
-### 3. Template authoring format
+### Stubbing integration
 
-Text templating (Handlebars/EJS/Liquid) vs. copy-with-substitution (cookiecutter-style `{{ foo }}`)? Binary files? How do multiple components' `template/` folders **compose** into a single output tree — who owns which file, how are conflicts resolved?
-
-### 4. Recipe authoring
-
-Hand-written YAML / JSON, or generated via interactive wizard? Does a recipe itself live in the marketplace (so a dev can publish a recipe), or is it user-local?
-
-### 5. Stubbing integration
-
-Is a stub a separate component published alongside the real one, or a flag on the real one? How does a component declare which stub engine drives it, and how does Hex wire that up during generation?
-
-### 6. Prompt layers
-
-Confirmed: prompts live on components. Open: are there also recipe-level prompts (app name, org, shared config every component would otherwise re-ask)?
+a. **Where does the stub live** — separate component (`db-postgres-stub` alongside `db-postgres`), flag/mode on the real component, or both supported.
+b. **Wiring style** — runtime toggle (env var flips real ↔ stub) vs. scaffold-time choice. Likely a mix: runtime for stub-mode of the same component, scaffold-time for swapping to a different stub component.
+c. **Stub-engine adapter contract** — minimal interface for talking to Wiremock / pg-mem / Mockoon / etc. uniformly: install, configure, expose start / stop, wire into npm scripts; fixture (seed data) location.
 
 ## Incremental build plan
 
 Every slice leaves a usable tool. Upgrade (5) sits before contracts (6) on purpose — it's the hardest, most load-bearing piece, so we de-risk it with a single component before building multi-component abstractions on top. Marketplace infra is deliberately late.
 
 **Slice 1 — Single local component, prompts, render.**
-Component on disk with manifest + `template/`. Prompts, renders to an output path. Pick an off-the-shelf templating engine (Handlebars / Nunjucks / EJS). **Already useful**: Cookiecutter-equivalent minus catalogue.
+Component on disk with manifest + `template/`. Prompts, renders to an output path using Nunjucks (sandboxed). **Already useful**: Cookiecutter-equivalent minus catalogue.
 
-**Slice 2 — Recipe composing multiple local components.**
-Recipe file references N local components. Hex resolves, prompts each, composes template outputs into one tree (deliberate conflict policy for same-path files). **Real applications now buildable.**
+**Slice 2 — Recipe component composing multiple local children.**
+A composing component (recipe) references N local children. Hex resolves, prompts recipe-level then per-child, places each child in its own subdirectory, and emits root-level orchestration from the recipe's own `template/`. Children are self-contained subtrees — no file-merge by construction. **Real applications now buildable.**
 
 **Slice 3 — Git as a source.**
 Components fetched from git URL + tag, cached locally. No registry infra yet. **Teams can share components.**
