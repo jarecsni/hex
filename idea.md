@@ -203,6 +203,49 @@ Marketplace lint/badge can verify these conventions ("stubs prod-clean: ✓").
 
 **Swap (Section 2) is still available, separately.** If you want a *completely different* component (`db-postgres` → `db-sqlite`), that's contract-based swap — different mechanism, still works. Stubbing is "same component, dev mode"; swapping is "different component, same contract".
 
+### 7. Hooks & sandbox — declarative first, sandboxed JS as escape hatch
+
+Components ship customisation logic via two tiers, in order of preference:
+
+**Tier 1 — declarative rules in the manifest.** Most hooks are simple: rename if X, delete if Y, set a default if Z. Express these as YAML rules under the manifest's `hooks:` section. No code, no sandbox concerns, easy to reason about during upgrade.
+
+**Tier 2 — JavaScript files in `hooks/`.** For real conditional logic, authors write plain JS:
+
+```js
+// hooks/post_render.js
+export default async function({ answers, project, log }) {
+  if (answers.framework === 'react') await project.delete('src/index.vue');
+  log.info('Cleaned up Vue files');
+}
+```
+
+**Runtime: QuickJS compiled to WASM** (Shopify's Functions architecture — Javy-style). Hooks execute inside the embedded engine, *not* in the host Node process. Capabilities are exposed as injected host functions and are deliberately narrow:
+
+- `project.read(path)` / `write(path, content)` / `delete(path)` / `exists(path)` / `list(dir)` — scoped to the generated tree, cannot escape it.
+- `answers` — the recipe + component prompt answers.
+- `recipe` — recipe metadata (composed children, versions).
+- `log` — info/warn/error.
+- **No** `process.spawn`, **no** network, **no** filesystem outside the project tree, **no** env-var access, **no** `npm` packages inside hooks.
+
+**Lifecycle.** Per-component: `pre_render`, `post_render`, `pre_upgrade`, `post_upgrade`. Recipes get the same lifecycle at the orchestration level, fired around child execution.
+
+**Trust gradient.** Local-path components (dev workflow) can be allowed to run hooks unsandboxed via an explicit `--trust-local` flag — convenient while developing your own components. Anything fetched from git or the marketplace is sandboxed unconditionally. The sandbox is the default, the bypass is loud.
+
+**Tradeoff.** QuickJS is a JS subset — no Node APIs, no npm packages inside hooks. Acceptable price: npm-in-hook would be a supply-chain footgun across thousands of marketplace components anyway. Authors who need a real package for a hook should depend on it from the *generated app's* `package.json` and have the hook write code that uses it at runtime — not pull it in at scaffold time.
+
+### 8. Host CLI runtime — Node + TypeScript
+
+Hex itself is built in **Node + TypeScript**.
+
+- **Distribution**: `npm install -g @hex/cli` and `npx @hex/cli init …`. Target audience (web/full-stack devs) already has Node. No new runtime to install.
+- **Ecosystem fit**: Nunjucks (Section 4) is native JS. Mature libraries for everything Hex needs — git ops (`isomorphic-git` or shelling to `git`), prompts (`@clack/prompts`, `inquirer`), YAML (`yaml`), 3-way merge (`diff3`), filesystem walks, semver.
+- **Hook sandbox embeds cleanly**: QuickJS-WASM (Section 7) runs in-process in Node via `@bjorn3/quickjs-emscripten` or wasmtime-node — no separate runtime process to manage.
+- **Prior art alignment**: Yeoman, Backstage Software Templates, Cruft-via-Python aside, the JS-scaffolder lineage is well-trodden.
+
+**Tradeoff acknowledged.** Single-binary distribution (Go, Rust) would be cleaner for users who don't want Node — particularly for non-JS target stacks (a Python team using Hex to scaffold a Django+React app shouldn't need Node just to run Hex). If that becomes a real complaint, ship a standalone binary later via `bun build --compile` or `pkg` — same TS source, additional distribution channel. Don't pre-optimise.
+
+**Why not Go / Rust / Swift now**: Go forces re-picking the templating engine away from Nunjucks (or embedding a JS runtime, which negates the simplicity). Rust same plus slower iteration. Swift loses cross-platform — Linux/Windows are second-class.
+
 ## Open threads
 
 _(All major threads landed — see Section 5 for the templating-context refinement and Section 6 for marketplace-lint conventions; both are detail-work, not blockers.)_
@@ -212,13 +255,13 @@ _(All major threads landed — see Section 5 for the templating-context refineme
 Every slice leaves a usable tool. Upgrade (5) sits before contracts (6) on purpose — it's the hardest, most load-bearing piece, so we de-risk it with a single component before building multi-component abstractions on top. Marketplace infra is deliberately late.
 
 **Slice 1 — Single local component, prompts, render.**
-Component on disk with manifest + `template/`. Prompts, renders to an output path using Nunjucks (sandboxed). **Already useful**: Cookiecutter-equivalent minus catalogue.
+Node + TS CLI (Section 8). Component on disk with manifest + `template/`. Prompts (`@clack/prompts`-style), renders to an output path using Nunjucks (sandboxed). Hooks: declarative-only at this slice; JS-on-WASM (Section 7) lands when marketplace fetches do (Slice 3). **Already useful**: Cookiecutter-equivalent minus catalogue.
 
 **Slice 2 — Recipe component composing multiple local children.**
 A composing component (recipe) references N local children. Hex resolves, prompts recipe-level then per-child, places each child in its own subdirectory, and emits root-level orchestration from the recipe's own `template/`. Children are self-contained subtrees — no file-merge by construction. **Real applications now buildable.**
 
-**Slice 3 — Git as a source.**
-Components fetched from git URL + tag, cached locally. No registry infra yet. **Teams can share components.**
+**Slice 3 — Git as a source + JS hook sandbox.**
+Components fetched from git URL + tag, cached locally. No registry infra yet. JS hooks (Section 7) now run in QuickJS-WASM since fetched code is no longer trusted; local-path components keep the unsandboxed path behind `--trust-local`. **Teams can share components.**
 
 **Slice 4 — Lockfile.**
 `hex-lock.yml` records recipe + components + versions + answers + hashes. Generated app becomes self-describing. Sets the table for Slice 5.
