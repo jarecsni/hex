@@ -147,13 +147,65 @@ Both layers are real. UX flow:
 
 Refinement TBD: exact shape of the templating context — namespacing of recipe vs. component answers and of sibling-presence facts. Treat as a refinement, not a blocker.
 
+### 6. Stubbing — components ship their own stub support
+
+Stubs are a **dev + CI** concern. The contract work in Section 2 makes them mostly fall out for free.
+
+**Components ship their stub support.** A stubbable component declares a `stub:` section in its manifest:
+
+```yaml
+name: db-postgres
+version: 1.2.0
+kind: db
+provides: [DB_URL, schema_migrator]
+prompts:
+  - port: { default: 5432 }
+  - seed_data: { default: minimal, when: stub }
+stub:
+  engine: pg-mem
+  fixtures: fixtures/
+```
+
+`stub:` is optional — components without it are real-only. Marketplace can badge "stubbable: yes/no" to nudge authors.
+
+**Single source of truth, single version.** Real and stub ship together, in lockstep, by the same author. No marketplace drift. Same manifest, same publish flow, same upgrade engine. A separate `*-stub` component remains a fallback for cases the real-component author didn't cover (e.g. someone else's paid SaaS) — escape hatch, not the primary pattern.
+
+**Recipes enable stub mode per slot:**
+
+```yaml
+composes:
+  api: api-express@^1.0
+  db:
+    component: db-postgres@^2.0
+    stub: true                 # this slot runs in stub mode
+  auth:
+    component: auth-jwt@^1.0   # real
+```
+
+`stub: true` flows into the templating context as a well-known answer. Manifest-level conditional file inclusion gates stub-only / real-only files. Inside files, Nunjucks branches on `stub_enabled` for code-block-level differences.
+
+**No stubs in the production build — by convention, not by recipe knob.** Stubbable components structure their template so prod builds exclude stub code:
+
+- **Separate entry points** — `src/index.ts` (prod, real only) vs `src/index.dev.ts` (dev, imports stubs). `package.json` scripts: `dev` uses the dev entry, `build` / `start` use the prod entry. Bundlers tree-shake; the prod artifact never references stub code.
+- **devDependencies for stub engines** — `pg-mem`, `msw`, etc. live in `devDependencies` only. Prod `npm install --omit=dev` pulls none of it.
+- **Docker compose profiles** — stub services tagged `profiles: [dev]`. `docker-compose up` runs the prod-shape topology; `docker-compose --profile dev up` adds the stubs.
+
+Marketplace lint/badge can verify these conventions ("stubs prod-clean: ✓").
+
+**Engine reuse — split by engine kind:**
+
+- **In-process libraries** (pg-mem, MSW, ioredis-mock, mongodb-memory-server) — npm packages each component declares as devDeps. Dedup is the package manager's job (workspaces / pnpm hoisting); Hex doesn't intervene.
+- **Out-of-process services** (Wiremock, Mockoon, testcontainers-style) — Hex detects overlap at recipe instantiation: if multiple components declare `engine: wiremock`, the recipe's root `docker-compose.yml` gets one Wiremock service the components share, each with its own mappings/fixtures.
+
+**Fixtures** scaffold into the user's tree (`<component>/fixtures/`) so they can be edited and version-controlled.
+
+**Pristine + upgrade still works.** `stub: true` is just another stored answer in the lockfile; pristine reconstruction reproduces the right tree. Stub-mode flips don't break the upgrade engine.
+
+**Swap (Section 2) is still available, separately.** If you want a *completely different* component (`db-postgres` → `db-sqlite`), that's contract-based swap — different mechanism, still works. Stubbing is "same component, dev mode"; swapping is "different component, same contract".
+
 ## Open threads
 
-### Stubbing integration
-
-a. **Where does the stub live** — separate component (`db-postgres-stub` alongside `db-postgres`), flag/mode on the real component, or both supported.
-b. **Wiring style** — runtime toggle (env var flips real ↔ stub) vs. scaffold-time choice. Likely a mix: runtime for stub-mode of the same component, scaffold-time for swapping to a different stub component.
-c. **Stub-engine adapter contract** — minimal interface for talking to Wiremock / pg-mem / Mockoon / etc. uniformly: install, configure, expose start / stop, wire into npm scripts; fixture (seed data) location.
+_(All major threads landed — see Section 5 for the templating-context refinement and Section 6 for marketplace-lint conventions; both are detail-work, not blockers.)_
 
 ## Incremental build plan
 
