@@ -1,19 +1,19 @@
 #!/usr/bin/env node
 import { Command } from 'commander';
 import { brand } from './brand/colors.js';
-import { splash } from './brand/splash.js';
+import { VERSION, splash } from './brand/splash.js';
 import { registerDoctor } from './commands/doctor.js';
 
-const VERSION = '0.1.0';
+process.on('exit', () => {
+  if (process.stdout.isTTY) process.stdout.write('\n');
+});
 
 const program = new Command();
 
 program
   .name('hex')
-  .description('Scaffolding tool that assembles applications from templated components.')
   .version(VERSION, '-v, --version', 'print version and exit')
-  .addHelpText('beforeAll', `${splash()}\n`)
-  .addHelpText('afterAll', `\n  ${brand.dim(`hex ${VERSION} — honeycomb scaffolding`)}\n`);
+  .addHelpText('beforeAll', `${splash()}\n`);
 
 registerDoctor(program);
 

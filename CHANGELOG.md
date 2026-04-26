@@ -7,9 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.1] — 2026-04-25
+
 ### Changed
 
 - Package renamed from `hex` to `@hexology/hex`. The `@hexology` scope is reserved for related tools (CLI, future component libraries, marketplace client). The bin command remains `hex`.
+- Splash redrawn as a font-independent ASCII honeycomb (5 tessellated cells using `/`, `\`, `_`); no longer relies on Unicode `⬢`/`⬡`/`⬣` glyphs that fall back to circles in fonts without those codepoints.
+- Brand surface now shows "hex {version} — Application Stack Composer" plus a pitch line beside the splash on every entry point (`doctor`, `--help`, default help). VERSION + tagline + pitch live in `brand/splash.ts` so any new surface that calls `splash()` inherits them.
+- `hex doctor` trimmed — drops the TTY / Unicode glyphs / ANSI colours capability rows; keeps Node, Platform, Terminal.
+- CLI emits a single trailing newline only when stdout is a TTY, so interactive output ends with one breathing line before the prompt while piped/redirected output stays clean.
+
+### Removed
+
+- `program.description` from the root commander setup — the splash pitch covers it, and Commander was rendering it verbatim under the splash in `--help`.
 
 ## [0.1.0] — 2026-04-25
 

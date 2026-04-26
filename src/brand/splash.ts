@@ -1,17 +1,18 @@
-import { detectCapabilities } from '../util/tty.js';
 import { brand } from './colors.js';
-import { getGlyphs } from './glyphs.js';
+
+export const VERSION = '0.1.1';
+const TAGLINE = 'Application Stack Composer';
+const PITCH = 'Compose your application stack using templated components and recipes.';
 
 export function splash(): string {
-  const caps = detectCapabilities();
-  if (!caps.unicode) {
-    return `  ${brand.honeyBold('hex')}`;
-  }
-  const g = getGlyphs(true);
-  const honey = brand.honey;
+  const e = brand.honey;
+  const title = `${brand.bold(`hex ${VERSION}`)}  ${brand.dim(`—  ${TAGLINE}`)}`;
+  const subtitle = brand.dim(PITCH);
   return [
-    `   ${honey(g.empty)} ${honey(g.empty)}`,
-    `  ${honey(g.empty)} ${brand.honeyBold(g.filled)} ${honey(g.empty)}`,
-    `   ${honey(g.empty)} ${honey(g.empty)}`,
+    `      ${e('__    __')}`,
+    `   ${e('__/  \\__/  \\')}`,
+    `  ${e('/  \\__/  \\__/')}`,
+    `  ${e('\\__/  \\__/')}      ${title}`,
+    `     ${e('\\__/')}         ${subtitle}`,
   ].join('\n');
 }
