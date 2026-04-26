@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0] — 2026-04-26
+
+### Added
+
+- Self-update flow on launch. Hex checks the npm registry on every interactive run, prompts the user when a newer version is available, runs `npm i -g @hexology/hex@latest`, and re-launches the new binary with the same args. Skipped when stdin/stdout isn't a TTY (CI, pipes, redirects), when `HEX_NO_UPDATE_CHECK=1` is set, or when the registry fetch fails / times out (2s).
+
+### Changed
+
+- `VERSION` is now read at runtime from `package.json` instead of being hardcoded in `src/brand/splash.ts`. Single source of truth; editing the installed `package.json` lets you fake an older version for testing the self-update prompt.
+
 ## [0.1.1] — 2026-04-25
 
 ### Changed
