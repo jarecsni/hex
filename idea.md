@@ -8,15 +8,16 @@ A scaffolding tool that assembles applications from pluggable **components** und
 
 ## Vocabulary
 
-- **Component** — the only artifact type in Hex. A self-contained, templated subproject (API, DB, auth, UI shell, …) with a manifest, a `template/` folder, hooks, and migrations. Published and versioned. Fetched by Hex from a repo or the marketplace.
-- **Template** — the scaffolding files inside a component, under `template/`. Substitutes user answers into file contents *and* file / directory names.
-- **Recipe** — the **role** a component plays when its manifest declares `composes:` (a list of other components). A recipe owns the root-level orchestration files (`docker-compose.yml`, root `package.json` for workspaces, root README, …); its composed children own their own subtrees. Recipes are **not a separate artifact type** — they live in the marketplace alongside leaf components and use the same publish / version / upgrade flow.
-- **Marketplace / catalogue** — an npmjs-style registry where devs register and version components (leaf or composing). Own package format TBD.
-- **Application** — the generated project: the recipe component's root-orchestration tree plus its children's subtrees, retaining enough metadata to be upgraded.
+- **Component** — a leaf scaffolding artifact (API, DB, auth, UI shell, …) with a manifest, a `template/` folder, hooks, and migrations. Published and versioned. Fetched by Hex from a source (local path, git, marketplace). Components never compose other components — they are leaves in the assembly tree. Manifest carries `type: component`.
+- **Recipe** — a composing scaffolding artifact that assembles components into a stack. Same repo layout, manifest shape, and publish / version / upgrade flow as a component, distinguished by `type: recipe` and a `composes:` list. A recipe owns the root-level orchestration files (`docker-compose.yml`, root `package.json` for workspaces, root README, …); its composed children own their own subtrees. Recipes can compose other recipes (tree-shaped, not a graph). The engine treats both archetypes uniformly — no `if (recipe)` branches in the upgrade or render pipeline; the marketplace surfaces them as two browsable categories.
+- **Template** — the scaffolding files inside a component or recipe, under `template/`. Substitutes user answers into file contents *and* file / directory names.
+- **Source** — where Hex fetches a component or recipe from, by name + version. v1 ships `FileSource` (local path), `GitSource` (URL + tag), and `MarketplaceSource` (registry) behind a single `Source` interface. Hex never uses VCS-shaped semantics on top of these (no commits, branches, diffs) — a `Source` is just a versioned byte-fetcher. See Section 9.
+- **Marketplace / catalogue** — an npmjs-style registry where devs register and version components and recipes. Own package format TBD.
+- **Application** — the generated project: the recipe's root-orchestration tree plus its children's subtrees, retaining enough metadata to be upgraded.
 
 ## Component repo layout (draft)
 
-The shape is the same for leaf components and recipes (composing components):
+The shape is the same for components and recipes:
 
 ```
 my-component/
@@ -24,14 +25,14 @@ my-component/
   hooks/             # customisation hooks (pre/post generate, pre/post upgrade, ...)
   migrations/        # version-to-version migration scripts (upgrade story)
   deploy/            # pluggable deployment hook
-  <manifest>         # version, prompts, kind, provides/consumes, composes (if recipe), ...
+  <manifest>         # type, version, prompts, kind, provides/consumes/requires, composes (if recipe), ...
 ```
 
 ## Principles
 
 - **Not fire-and-forget**: apps remember how they were built so newer component versions can be re-applied.
-- **Components are self-contained subprojects** — each owns its own subtree of the generated app and never writes outside it. Cross-component "central wiring" lives in the **recipe** (a composing component) which owns the root-level orchestration files.
-- **One artifact type, uniform marketplace** — leaf and composing components share the same repo layout, manifest shape, publish flow, versioning, and upgrade engine. "Recipe" is a role, not a type.
+- **Components are self-contained subprojects** — each owns its own subtree of the generated app and never writes outside it. Cross-component "central wiring" lives in the **recipe** which owns the root-level orchestration files.
+- **Two archetypes, one engine** — components and recipes share the same repo layout, manifest shape, publish flow, versioning, and upgrade engine. The split is surfaced to users (marketplace categories, CLI affordances) and to the resolver (only recipes have `composes:`); the engine itself never branches on archetype.
 - **Pluggable components** — recipes can swap one component for another of the same kind, or **stub** it.
 - **Stubbing reuses existing stub engines**; Hex defines integration points, doesn't build engines.
 - **Pluggable deployment from day one** — contract in place even though we won't ship many plugins at start.
@@ -80,20 +81,29 @@ Default when a file disappears and the user has edited it: **preserve and orphan
 Each component manifest declares:
 
 - **`provides`** — what it contributes to the recipe: env vars, generated symbols, service URLs, file-layout promises, …
-- **`consumes`** — what it needs from sibling components in the recipe.
+- **`consumes`** — values, symbols, or paths the component needs bound to it from sibling components (`DB_URL`, `api_routes_dir`, `schema_migrator`, …).
+- **`requires`** — peer-presence assertions. "I need a component of kind X (or specifically `foo@^1.0`) to be present alongside me." Two flavours:
+  - by kind: `requires: [{ kind: monitoring }]` — any peer of that kind satisfies
+  - by name+version: `requires: [{ name: auth-session, version: ^1.0 }]` — specific peer pinned
 
-At recipe resolve time Hex validates: every `consumes` slot has at least one `provides` satisfying it. Swap-ability falls out: any component with `kind: api` and matching `provides` fits the slot. A stub satisfies the same contract as the real component — that's what makes stubbing interchangeable without recipe edits.
+`consumes` and `requires` differ in failure mode: missing `consumes` is a wiring problem ("no `DB_URL` provider"); missing `requires` is a composition problem ("this recipe has no `monitoring` component"). Different errors, different fixes. Examples where `requires` is the right shape, not `consumes`: a `metrics-prometheus` component that registers scrapers across the stack needs *some* `kind: monitoring` peer to register into; a `csrf` component needs `auth-session` to exist so it can hook into the session chain; a `db-seed-data` component needs any `kind: db` peer present so it can run seeds against it.
+
+At recipe resolve time Hex validates: every `consumes` slot has at least one `provides` satisfying it, and every `requires` assertion is satisfied by a peer in the recipe. Swap-ability falls out: any component with `kind: api` and matching `provides` fits the slot. A stub satisfies the same contract as the real component — that's what makes stubbing interchangeable without recipe edits.
 
 Feeds Thread 1: migration scripts can target the declared contract rather than touching component internals, so unrelated components upgrading independently don't collide.
 
-### 3. Composition — recipes are composing components
+### 3. Composition — two archetypes, one engine
 
-Components are self-contained: each owns one subtree and never writes outside it. There are no shared files (no `package.json` mutated by three components). Cross-component glue lives in a **recipe** — a composing component whose manifest declares `composes:` listing its children.
+Two artifact archetypes:
 
-Same artifact type for both:
+- **Component** (`type: component`) — a leaf. Owns one subtree of the generated app, never writes outside it, never composes other components. Declares `kind:` (`api`, `db`, `auth`, …) for slot matching.
+- **Recipe** (`type: recipe`) — a composing artifact. Declares `composes:` listing its children. Owns the root-level orchestration files (`docker-compose.yml`, root `package.json` for workspaces, root README, …) via its own `template/`. Each child fills its own subdirectory; default names come from the `composes:` keys, the user can override at prompt time.
+
+Both archetypes share the same repo layout, manifest shape, hooks, migrations, publish flow, and upgrade engine. The engine has no `if (recipe)` branches — render, hook, migrate, upgrade all operate uniformly. The split is surfaced to the user (marketplace categories, CLI affordances) and to the resolver (only recipes have `composes:`).
 
 ```yaml
-# leaf
+# component (leaf)
+type: component
 name: api-express
 version: 1.2.0
 kind: api
@@ -103,7 +113,8 @@ prompts:
 ```
 
 ```yaml
-# recipe (composing component)
+# recipe
+type: recipe
 name: fullstack-monorepo
 version: 1.0.0
 composes:
@@ -115,9 +126,9 @@ prompts:
   - containerize: { default: true }
 ```
 
-The recipe owns the root-level orchestration files via its own `template/` (`docker-compose.yml`, root `package.json` for workspaces, root README, …). Each child fills its own subdirectory. Default subdirectory names come from the recipe's `composes:` keys; the user can override at prompt time.
+Recipes can compose other recipes — assembly is **tree-shaped, never a graph**. A "fullstack-monorepo" recipe pulling in a "backend-stack" recipe + a "frontend-stack" recipe is plausible. A leaf component pulling in another leaf is not — relationships between leaves are expressed via contracts (`provides` / `consumes` / `requires`), not nesting.
 
-Recipes can compose other recipes — recursion is free.
+**Why two archetypes given identical mechanics?** User-facing distinctions matter even when engine-facing ones don't. Marketplace browsing is asymmetric — you browse recipes by stack shape ("Next.js + Postgres + auth"), components by kind ("any `db`"). Components are leaves in 99% of real cases; allowing every component to potentially compose adds API surface that almost nobody uses and obscures the 1% genuine recipes. The split keeps the public model honest without complicating the engine.
 
 Versioning interacts naturally with Section 1: a recipe at v1.2 pins specific child versions; bumping the recipe to v1.3 may bump children, which kicks off transitive upgrades through the same engine. Conceptually like `npm update` of a top-level package.
 
@@ -154,6 +165,7 @@ Stubs are a **dev + CI** concern. The contract work in Section 2 makes them most
 **Components ship their stub support.** A stubbable component declares a `stub:` section in its manifest:
 
 ```yaml
+type: component
 name: db-postgres
 version: 1.2.0
 kind: db
@@ -246,42 +258,89 @@ Hex itself is built in **Node + TypeScript**.
 
 **Why not Go / Rust / Swift now**: Go forces re-picking the templating engine away from Nunjucks (or embedding a JS runtime, which negates the simplicity). Rust same plus slower iteration. Swift loses cross-platform — Linux/Windows are second-class.
 
+### 9. Component sources
+
+Components and recipes are fetched by Hex from a **Source**. v1 ships three behind a single `Source` interface: `resolve(name, version_spec) → ComponentBundle`. Despite the git case, Hex never uses VCS-shaped semantics on top — no commits, branches, diffs. A `Source` is just a versioned byte-fetcher.
+
+- **`FileSource`** — local path. No network, no auth; "version" is whatever's in the directory. Fastest dev loop while authoring components.
+- **`GitSource`** — URL + tag/sha. Tags carry semver; sha pins for reproducibility. Auth via standard git credentials.
+- **`MarketplaceSource`** — the registry (Slice 9). Semver resolution, signed packages.
+
+Slice 1 ships only `FileSource`; Slice 4 adds `GitSource`; Slice 9 adds `MarketplaceSource`. The interface is what makes the upgrade engine's pristine-tree reconstruction work uniformly — fetching "v1.2 of api-express" is the source's responsibility regardless of where the bytes live.
+
+**Caching above, auth inside.** A single cache layer sits above the sources (so "I already have api-express@1.2.0 on disk" hits the same store regardless of which source originally produced it). Auth credentials live inside each source — `GitSource` knows about `~/.gitconfig` and SSH keys, `MarketplaceSource` knows about API tokens, `FileSource` needs neither.
+
+**Source declared per dependency, not globally.** A recipe's `composes:` entries can reference any source by URL form:
+
+```yaml
+composes:
+  api: api-express@^1.0                                  # marketplace (default — bare name)
+  db: git+https://github.com/example/db-postgres@v2.1.0  # git
+  auth: file:../local/auth-jwt                           # file
+```
+
+Lets a team mix vendored, marketplace, and in-development local copies in the same recipe — and lets a component author iterate locally on a child while the rest of the recipe still pulls from the registry. Bare `name@version` is the marketplace default; an explicit prefix (`mp:` / `hex:`) is reserved for cases where ambiguity must be ruled out.
+
+**Discovery is a separate interface.** Fetch — `resolve(name, version_spec) → bundle` — is uniform across all three sources. *Discovery* — search, browse categories, list available versions, signing/badge metadata — only the marketplace has, and forcing file/git to no-op those methods is a smell. Modelled as a separate `Catalogue` interface implemented only by `MarketplaceSource`. The CLI's `hex search` / `hex browse` talks to `Catalogue`; the recipe resolver talks to `Source`. The marketplace class wears both hats; the moment one of those hats wants to call into the other, the split has rotted and we revisit.
+
+### 10. Deployment + CI/CD — first-class from day one
+
+Hex's pitch is *zero to dev environment, fast*. Local-first is fine for solo work; the value compounds when a teammate can hit a URL — which means deployment has to be in the box from the start. Two pluggable layers, peer concerns:
+
+- **Deploy adapter** — knows how to take a build artifact and ship it to a target. v1 candidates: Vercel and Cloudflare Pages (single-token, sub-minute cold deploy). Invoked from the local machine via `hex deploy`, or invoked inside CI by the workflow yaml — same adapter, two callers.
+- **CI/CD provider** — emits the workflow yaml (`.github/workflows/*.yml`, `.gitlab-ci.yml`, …) that runs the deploy adapter on every push, plus the rest of the build pipeline (typecheck, test, lint). v1 candidates: `cicd-github-actions`, `cicd-gitlab-ci`. The yaml lives inside a component or recipe's `template/` like any other file, parameterised through the same prompt + Nunjucks pipeline.
+
+**Why both, not just one.** First push is from the developer's machine — `hex deploy` puts the app live before the repo even exists on a remote. Every push after that is from CI — the yaml owns deployment forever. Without the local path, "zero to dev" requires "first set up CI/CD." Without the CI/CD path, "team mode" requires every developer to run `hex deploy` from their laptop. Both have to work, day one.
+
+**Adapter × provider are independent axes.** `vercel` × `github-actions`, `vercel` × `gitlab-ci`, `cloudflare-pages` × `github-actions` — all valid combos. A recipe (or standalone component) pins one of each:
+
+```yaml
+deploy:
+  adapter: vercel
+cicd:
+  provider: github-actions
+```
+
+**Component step contribution** (deferred). In a multi-component recipe, you'd want each component to contribute pipeline steps (typecheck, test, lint, migrate, …) via `provides:`, with the CI/CD provider assembling the final workflow from contributions plus the deploy step. Useful, but deferred — v1 keeps the yaml simple, owned by the recipe (or standalone component) directly, with each template carrying its own steps inline. Step contribution lands once we have real multi-component recipes that need it.
+
+**Tradeoff.** This adds two pluggable layers to early v1 instead of saving them for the end. Cost is acceptable because the SPA template (the second template after CLI — see Slice 2) is the natural place to prove both, and "zero to dev" doesn't sing without them.
+
 ## Open threads
 
 _(All major threads landed — see Section 5 for the templating-context refinement and Section 6 for marketplace-lint conventions; both are detail-work, not blockers.)_
 
 ## Incremental build plan
 
-Every slice leaves a usable tool. Upgrade (5) sits before contracts (6) on purpose — it's the hardest, most load-bearing piece, so we de-risk it with a single component before building multi-component abstractions on top. Marketplace infra is deliberately late.
+Every slice leaves a usable tool. Upgrade (Slice 6) sits before contracts (Slice 7) on purpose — it's the hardest, most load-bearing piece, so we de-risk it with a single component before building multi-component abstractions on top. Deployment + CI/CD land early (Slice 2) because "zero to dev" is the headline pitch and doesn't sing without them. Marketplace infra is deliberately late.
 
 **Slice 1 — Single local component, prompts, render.**
-Node + TS CLI (Section 8). Component on disk with manifest + `template/`. Prompts (`@clack/prompts`-style), renders to an output path using Nunjucks (sandboxed). Hooks: declarative-only at this slice; JS-on-WASM (Section 7) lands when marketplace fetches do (Slice 3). **Already useful**: Cookiecutter-equivalent minus catalogue.
+Node + TS CLI (Section 8). Component on disk with manifest + `template/`, fetched via `FileSource` (Section 9). Prompts (`@clack/prompts`-style), renders to an output path using Nunjucks (sandboxed). Hooks: declarative-only at this slice; JS-on-WASM (Section 7) lands when fetched code is no longer trusted (Slice 4). First template: a Node + TS CLI (with self-update) — extracted from Hex itself. **Already useful**: Cookiecutter-equivalent minus catalogue.
 
-**Slice 2 — Recipe component composing multiple local children.**
-A composing component (recipe) references N local children. Hex resolves, prompts recipe-level then per-child, places each child in its own subdirectory, and emits root-level orchestration from the recipe's own `template/`. Children are self-contained subtrees — no file-merge by construction. **Real applications now buildable.**
+**Slice 2 — SPA template + deployment + CI/CD ("zero to dev" lands).**
+Second template: Svelte SPA. First deploy adapter (Vercel or Cloudflare Pages) and first CI/CD provider (`cicd-github-actions`) — see Section 10. `hex deploy` works from a developer's machine; the rendered template ships with a workflow yaml that takes over deployment on every push after the repo lands on a remote. Standalone components only at this slice — no recipes yet. **The pitch is now demoable**: a teammate can hit a URL within minutes of `hex new svelte-spa`.
 
-**Slice 3 — Git as a source + JS hook sandbox.**
-Components fetched from git URL + tag, cached locally. No registry infra yet. JS hooks (Section 7) now run in QuickJS-WASM since fetched code is no longer trusted; local-path components keep the unsandboxed path behind `--trust-local`. **Teams can share components.**
+**Slice 3 — Recipe composing multiple local children.**
+A recipe (`type: recipe`) references N local children. Hex resolves, prompts recipe-level then per-child, places each child in its own subdirectory, and emits root-level orchestration from the recipe's own `template/`. Children are self-contained subtrees — no file-merge by construction. Still `FileSource` only. **Real multi-component applications now buildable.**
 
-**Slice 4 — Lockfile.**
-`hex-lock.yml` records recipe + components + versions + answers + hashes. Generated app becomes self-describing. Sets the table for Slice 5.
+**Slice 4 — `GitSource` + JS hook sandbox.**
+Adds `GitSource` (Section 9): components fetched from git URL + tag, cached locally. No registry infra yet. JS hooks (Section 7) now run in QuickJS-WASM since fetched code is no longer trusted; local-path components keep the unsandboxed path behind `--trust-local`. **Teams can share components.**
 
-**Slice 5 — Upgrade engine (the differentiator).**
+**Slice 5 — Lockfile.**
+`hex-lock.yml` records recipe + components + versions + answers + hashes. Generated app becomes self-describing. Sets the table for Slice 6.
+
+**Slice 6 — Upgrade engine (the differentiator).**
 Pristine reconstruction, stepwise chain, 3-way merge, `hex upgrade --continue`, migration script vocabulary (`rename` / `delete_if_unmodified` / `replace` / …). **Hex stops being "another scaffolder".**
 
-**Slice 6 — Contracts (`provides` / `consumes`) + swap.**
-Typed slots in recipes; kind-based resolution. Swap `api-express` for `api-fastify` with one recipe edit. **Pluggability becomes real.**
+**Slice 7 — Contracts (`provides` / `consumes` / `requires`) + swap.**
+Typed slots in recipes; kind-based resolution; peer-presence assertions checked at resolve time. Swap `api-express` for `api-fastify` (or `db-mysql` for `db-postgres`) with one recipe edit and a regenerate. **Pluggability becomes real.** Cross-component data migration across a swap is *not* in scope (see "Deliberately not in 1.0").
 
-**Slice 7 — Stub integration.**
+**Slice 8 — Stub integration.**
 Stub is a component satisfying the same contract as the real thing. Integrations with the first 1–2 external stub engines. **Stubbing pitch lands.**
 
-**Slice 8 — Marketplace / registry + package format.**
-Publish, discover, version. Website + index.
+**Slice 9 — Marketplace / registry + package format.**
+Publish, discover, version. Website + index. Adds `MarketplaceSource` plus the `Catalogue` discovery interface (Section 9) — third source on the fetch side, first and only catalogue on the discovery side. Additional deploy adapters and CI/CD providers (Section 10) ship through the marketplace once it's live — `cicd-gitlab-ci`, `cloudflare-pages-deploy`, etc.
 
-**Slice 9 — Pluggable deployment (one reference plugin).**
-Contract in place, one concrete adapter.
-
-Tradeoff flagged: **Slice 4 has no visible user value by itself** — it's scaffolding for Slice 5. Could fold into Slice 5; keeping them separate buys a smaller Slice 5 and an inspectable artifact along the way.
+Tradeoff flagged: **Slice 5 has no visible user value by itself** — it's scaffolding for Slice 6. Could fold into Slice 6; keeping them separate buys a smaller Slice 6 and an inspectable artifact along the way.
 
 ## Prior art
 
@@ -300,3 +359,7 @@ Tools Hex is learning from — read these when in doubt about a mechanism.
 
 - Building our own stub engines.
 - Shipping many deployment plugins at launch — pluggability only.
+
+### Deliberately not in 1.0 (parked for later)
+
+- **Cross-component data migration.** Component *swap* is in (kind-matched, contract-validated): a user can swap `db-mysql` for `db-postgres` in their recipe and regenerate to get a PostgreSQL-shaped app. What 1.0 will *not* do is migrate data and dialect-specific schema across the swap — moving a live MySQL database's content into the new PostgreSQL shape is a different product (closer to a DBA tool) and would derail the scaffolding-first 1.0 timeline. The contract design has already considered a per-kind canonical interchange ("metaQL" — `metaql.db.v1`, `metaql.queue.v1`, etc.) where each component implements export/import against the kind's shape and Hex orchestrates the round-trip; that work is parked for post-1.0.
