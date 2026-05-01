@@ -6,27 +6,49 @@ Status: **early** — working capture of the concept, not a spec. Expect this do
 
 A scaffolding tool that assembles applications from pluggable **components** under a **recipe**, and can **upgrade** those applications as components release new versions.
 
+## Plan at a glance
+
+| Phase | Theme | Milestones |
+|-------|-------|------------|
+| 1 | Configurable scaffolder | M1 (render pipeline), M2 (roots + discovery), M3 (`GitSource`) |
+| 2 | Zero to dev | M4 (deploy + CI/CD) |
+| 3 | Composition | M5 (recipes), M6 (contracts + swap) |
+| 4 | Trust + extensibility | M7 (JS hook sandbox), M8 (stub integration) |
+| 5 | Marketplace + policy | M9 (marketplace + `Catalogue` + policy) |
+| 6 | Upgrade | M10 (lockfile), M11 (upgrade engine) |
+
+Each phase ends with a usable tool. See "Incremental build plan" below for milestone detail and sizing.
+
 ## Vocabulary
 
 - **Component** — a leaf scaffolding artifact (API, DB, auth, UI shell, …) with a manifest, a `template/` folder, hooks, and migrations. Published and versioned. Fetched by Hex from a source (local path, git, marketplace). Components never compose other components — they are leaves in the assembly tree. Manifest carries `type: component`.
 - **Recipe** — a composing scaffolding artifact that assembles components into a stack. Same repo layout, manifest shape, and publish / version / upgrade flow as a component, distinguished by `type: recipe` and a `composes:` list. A recipe owns the root-level orchestration files (`docker-compose.yml`, root `package.json` for workspaces, root README, …); its composed children own their own subtrees. Recipes can compose other recipes (tree-shaped, not a graph). The engine treats both archetypes uniformly — no `if (recipe)` branches in the upgrade or render pipeline; the marketplace surfaces them as two browsable categories.
-- **Template** — the scaffolding files inside a component or recipe, under `template/`. Substitutes user answers into file contents *and* file / directory names.
+- **Template** — the scaffolding files inside a component or recipe — everything at the artifact's root other than `.hex/` metadata and `.hexignore`-listed paths. The engine substitutes user answers into file contents *and* file / directory names during render. See "Component repo layout".
 - **Source** — where Hex fetches a component or recipe from, by name + version. v1 ships `FileSource` (local path), `GitSource` (URL + tag), and `MarketplaceSource` (registry) behind a single `Source` interface. Hex never uses VCS-shaped semantics on top of these (no commits, branches, diffs) — a `Source` is just a versioned byte-fetcher. See Section 9.
 - **Marketplace / catalogue** — an npmjs-style registry where devs register and version components and recipes. Own package format TBD.
 - **Application** — the generated project: the recipe's root-orchestration tree plus its children's subtrees, retaining enough metadata to be upgraded.
 
-## Component repo layout (draft)
+## Component repo layout
 
-The shape is the same for components and recipes:
+The shape is the same for components and recipes. The artifact directory **is** the scaffolding — files at the root are what the engine renders into the generated app. Hex's authoring metadata lives in `.hex/`; nothing in `.hex/` ever lands in a generated app.
 
 ```
 my-component/
-  template/          # scaffolding files
-  hooks/             # customisation hooks (pre/post generate, pre/post upgrade, ...)
-  migrations/        # version-to-version migration scripts (upgrade story)
-  deploy/            # pluggable deployment hook
-  <manifest>         # type, version, prompts, kind, provides/consumes/requires, composes (if recipe), ...
+  .hex/
+    manifest.yaml    # type, version, prompts, kind, provides / consumes / requires, composes (if recipe), declarative hooks, ...
+    hooks/           # Tier 2 JS hook files (sandboxed at render / upgrade time)           — M7
+    migrations/      # version-to-version upgrade scripts                                  — M11
+    deploy/          # this component's deploy hook code                                   — M4
+  .hexignore         # paths excluded from render (node_modules, dist, .git, build outputs, ...)
+  package.json       # ← from here down, the artifact's own scaffolding (Nunjucks-rendered)
+  src/
+    ...
+  fixtures/          # data files for stub support — only present if the component has `stub:` declared (Section 6)
 ```
+
+**Why `.hex/` instead of an inner `template/` wrapper.** With this shape, the artifact directory is itself a runnable project — a component author can `cd` in, `npm install`, run tests, lint, type-check the template *as* a project. Cookiecutter's inner-`{{ project_slug }}/` wrapper makes the authored artifact non-runnable; Copier dropped the wrapper for the same reason. The cost is two engine rules — skip `.hex/` during render, honour `.hexignore` — both trivial.
+
+**`.hex/` is the same name in generated apps.** Once the lockfile lands (M10), every generated app gets a `.hex/` of its own holding `lockfile.yaml` (recipe + components + versions + answers + hashes). Same folder name, different contents: in an authored component, `.hex/manifest.yaml` describes *how to scaffold*; in a generated app, `.hex/lockfile.yaml` describes *what was scaffolded*. "Hex stuff lives in `.hex/`" is the consistent rule across both surfaces.
 
 ## Principles
 
@@ -97,7 +119,7 @@ Feeds Thread 1: migration scripts can target the declared contract rather than t
 Two artifact archetypes:
 
 - **Component** (`type: component`) — a leaf. Owns one subtree of the generated app, never writes outside it, never composes other components. Declares `kind:` (`api`, `db`, `auth`, …) for slot matching.
-- **Recipe** (`type: recipe`) — a composing artifact. Declares `composes:` listing its children. Owns the root-level orchestration files (`docker-compose.yml`, root `package.json` for workspaces, root README, …) via its own `template/`. Each child fills its own subdirectory; default names come from the `composes:` keys, the user can override at prompt time.
+- **Recipe** (`type: recipe`) — a composing artifact. Declares `composes:` listing its children. Owns the root-level orchestration files (`docker-compose.yml`, root `package.json` for workspaces, root README, …) via its own root scaffolding (sibling to `.hex/`, see "Component repo layout"). Each child fills its own subdirectory; default names come from the `composes:` keys, the user can override at prompt time.
 
 Both archetypes share the same repo layout, manifest shape, hooks, migrations, publish flow, and upgrade engine. The engine has no `if (recipe)` branches — render, hook, migrate, upgrade all operate uniformly. The split is surfaced to the user (marketplace categories, CLI affordances) and to the resolver (only recipes have `composes:`).
 
@@ -147,16 +169,26 @@ Bonus alignment: Cookiecutter and Copier both use Jinja2. Component authors fami
 
 Conditional **file** inclusion (e.g. emit `Dockerfile` only if `containerize: true`) lives at the **manifest level**, not via `{% if %}` wrapping a whole file — cleaner, and easier to reason about during upgrade.
 
-### 5. Prompts — recipe-level + component-level
+### 5. Prompts — two surfaces, two layers
 
-Both layers are real. UX flow:
+**Two surfaces** within a single artifact (component or recipe):
 
-1. Recipe-level prompts first (project name, license, target environment, `containerize`, …).
-2. Then component sections in turn ("Configuring `api-express`…").
-3. Components can read recipe-level answers (so a child can branch on `containerize`).
-4. Components can see which siblings are present in the recipe (so an `api` component can branch on whether `auth` is in play, for example).
+- **Top-level manifest `prompts:`** — questions whose answers feed the template directly (the values `template/` files reference via `{{ project_name }}`, `{{ port }}`, `{{ containerize }}`, …). Fire once, up front, before render.
+- **Per-hook `prompts:`** — each hook (Section 7, declarative or JS) can declare its own `prompts:` block scoped to that hook. Fire at the hook's lifecycle moment, not up front, so a `post_upgrade` hook that needs to ask about a freshly-detected conflict can ask in context.
 
-Refinement TBD: exact shape of the templating context — namespacing of recipe vs. component answers and of sibling-presence facts. Treat as a refinement, not a blocker.
+A flat, top-level-only prompt list with `when:` guards trying to encode "ask this only if the post_upgrade hook will run" collapses fast — Nx generators hit this and split per-generator for the same reason.
+
+**Two layers** across the recipe/component split — both surfaces stack the same way:
+
+1. Recipe-level top-level prompts first (project name, license, target environment, `containerize`, …).
+2. Then component sections in turn ("Configuring `api-express`…") — each child's top-level prompts.
+3. Hooks (recipe-level and per-component) prompt at their lifecycle moments — not batched up front.
+
+Components can read recipe-level answers (so a child can branch on `containerize`) and see which siblings are present in the recipe (so an `api` component can branch on whether `auth` is in play).
+
+**Namespacing — shared read, isolated write.** Hooks see the full answers tree (`answers.project_name`, `answers.api.port`, …). A hook's *own* prompt answers land under its own namespace (`answers.hooks.<hook_name>.*`) so two hooks can both have a `mode:` prompt without colliding. Top-level prompts at the manifest root land at the artifact's root namespace.
+
+Refinement TBD: exact answer-tree shape (sibling-presence flags, whether component top-level answers nest under `answers.<component_kind>.*` or `answers.components.<name>.*`). Treat as a refinement, not a blocker.
 
 ### 6. Stubbing — components ship their own stub support
 
@@ -221,7 +253,7 @@ Components ship customisation logic via two tiers, in order of preference:
 
 **Tier 1 — declarative rules in the manifest.** Most hooks are simple: rename if X, delete if Y, set a default if Z. Express these as YAML rules under the manifest's `hooks:` section. No code, no sandbox concerns, easy to reason about during upgrade.
 
-**Tier 2 — JavaScript files in `hooks/`.** For real conditional logic, authors write plain JS:
+**Tier 2 — JavaScript files in `.hex/hooks/`.** For real conditional logic, authors write plain JS:
 
 ```js
 // hooks/post_render.js
@@ -240,6 +272,8 @@ export default async function({ answers, project, log }) {
 - **No** `process.spawn`, **no** network, **no** filesystem outside the project tree, **no** env-var access, **no** `npm` packages inside hooks.
 
 **Lifecycle.** Per-component: `pre_render`, `post_render`, `pre_upgrade`, `post_upgrade`. Recipes get the same lifecycle at the orchestration level, fired around child execution.
+
+**Hook-defined prompts.** Each hook — declarative or JS, both tiers — can declare its own `prompts:` block. These fire at the hook's lifecycle moment (not batched up front with the manifest's top-level prompts), and their answers land under `answers.hooks.<hook_name>.*` (Section 5). Lets a `post_upgrade` hook ask about a freshly-detected conflict in context, instead of forcing the manifest's top-level prompts to anticipate every conditional question via `when:` guards. The top-level `prompts:` stays for the substitutions the template references directly.
 
 **Trust gradient.** Local-path components (dev workflow) can be allowed to run hooks unsandboxed via an explicit `--trust-local` flag — convenient while developing your own components. Anything fetched from git or the marketplace is sandboxed unconditionally. The sandbox is the default, the bypass is loud.
 
@@ -264,9 +298,9 @@ Components and recipes are fetched by Hex from a **Source**. v1 ships three behi
 
 - **`FileSource`** — local path. No network, no auth; "version" is whatever's in the directory. Fastest dev loop while authoring components.
 - **`GitSource`** — URL + tag/sha. Tags carry semver; sha pins for reproducibility. Auth via standard git credentials.
-- **`MarketplaceSource`** — the registry (Slice 9). Semver resolution, signed packages.
+- **`MarketplaceSource`** — the registry (M9). Semver resolution, signed packages.
 
-Slice 1 ships only `FileSource`; Slice 4 adds `GitSource`; Slice 9 adds `MarketplaceSource`. The interface is what makes the upgrade engine's pristine-tree reconstruction work uniformly — fetching "v1.2 of api-express" is the source's responsibility regardless of where the bytes live.
+M1 ships only `FileSource`; M3 adds `GitSource`; M9 adds `MarketplaceSource`. The interface is what makes the upgrade engine's pristine-tree reconstruction work uniformly — fetching "v1.2 of api-express" is the source's responsibility regardless of where the bytes live.
 
 **Caching above, auth inside.** A single cache layer sits above the sources (so "I already have api-express@1.2.0 on disk" hits the same store regardless of which source originally produced it). Auth credentials live inside each source — `GitSource` knows about `~/.gitconfig` and SSH keys, `MarketplaceSource` knows about API tokens, `FileSource` needs neither.
 
@@ -274,21 +308,32 @@ Slice 1 ships only `FileSource`; Slice 4 adds `GitSource`; Slice 9 adds `Marketp
 
 ```yaml
 composes:
-  api: api-express@^1.0                                  # marketplace (default — bare name)
+  api: api-express@^1.0                                  # marketplace — bare name, walks configured
+  ui: hex/ui-react@^3.0                                  # marketplace — explicit ID (hex)
   db: git+https://github.com/example/db-postgres@v2.1.0  # git
   auth: file:../local/auth-jwt                           # file
 ```
 
-Lets a team mix vendored, marketplace, and in-development local copies in the same recipe — and lets a component author iterate locally on a child while the rest of the recipe still pulls from the registry. Bare `name@version` is the marketplace default; an explicit prefix (`mp:` / `hex:`) is reserved for cases where ambiguity must be ruled out.
+Lets a team mix vendored, marketplace, and in-development local copies in the same recipe — and lets a component author iterate locally on a child while the rest of the recipe still pulls from the registry. Bare `name@version` resolves by walking the configured marketplaces in order — first hit wins. Explicit qualification `<marketplace-id>/<name>@<version>` names a specific marketplace (see "Discovery model" below).
 
 **Discovery is a separate interface.** Fetch — `resolve(name, version_spec) → bundle` — is uniform across all three sources. *Discovery* — search, browse categories, list available versions, signing/badge metadata — only the marketplace has, and forcing file/git to no-op those methods is a smell. Modelled as a separate `Catalogue` interface implemented only by `MarketplaceSource`. The CLI's `hex search` / `hex browse` talks to `Catalogue`; the recipe resolver talks to `Source`. The marketplace class wears both hats; the moment one of those hats wants to call into the other, the split has rotted and we revisit.
+
+**Discovery model — two layers, marketplaces as the unit.** Discovery scope is configured as an array of **marketplaces**: the public Hex marketplace (the default — disable-able) and zero or more **company marketplaces**. There is no per-user "personal override" layer; an installation is pointed at some union of these and that's it. Local file paths used during template authoring are just another `FileSource`, not a discovery layer.
+
+Each marketplace has an **ID** (e.g. `hex` for the public one, `acme` for a company instance). Templates are addressable in fully qualified form `<marketplace-id>/<name>@<version>` — `hex/api-express@^1.0`, `acme/db-postgres@^2.0`. Bare `name@version` resolves by walking configured marketplaces in order; explicit qualification disambiguates and pins.
+
+**Aggregation across multiple company marketplaces.** A team can configure several company marketplaces at the same level (e.g. `acme` and `acme-frontend`); Hex aggregates them into a flat union. Clashes — two marketplaces shipping a template with the same bare name — are resolved by qualified-name addressing: `acme/ui-react` and `acme-frontend/ui-react` are unambiguous and coexist. Bare-name resolution still uses configured order to pick a default.
+
+**Override and block — qualified name, hard semantics.** A company marketplace can **block** any qualified entry from another marketplace (typically the public one); blocked entries are filtered out of all discovery and resolution as if they didn't exist — no greyed-out badge, no "blocked by policy" stub. A company marketplace can also **override** an entry by hosting its own version under a different qualified name and configuring its own bare-name preference toward it (e.g. block `hex/api-express`, prefer `acme/api-express`). Granularity is by qualified name only — no version-range overrides, no tag-level filters; if you need finer slicing, fork the entry. The override/block rules live inside the company marketplace itself, not in a separate per-user policy file.
+
+**Phasing.** This full model lands with M9. Phases 1–4 ship a degenerate version: source roots configured against file paths (M2) and git URLs (M3) are walked directly with no `Catalogue` interface, no marketplace IDs, and no override/block mechanics. The architecture leaves room for the M9 model without forcing it on early phases.
 
 ### 10. Deployment + CI/CD — first-class from day one
 
 Hex's pitch is *zero to dev environment, fast*. Local-first is fine for solo work; the value compounds when a teammate can hit a URL — which means deployment has to be in the box from the start. Two pluggable layers, peer concerns:
 
 - **Deploy adapter** — knows how to take a build artifact and ship it to a target. v1 candidates: Vercel and Cloudflare Pages (single-token, sub-minute cold deploy). Invoked from the local machine via `hex deploy`, or invoked inside CI by the workflow yaml — same adapter, two callers.
-- **CI/CD provider** — emits the workflow yaml (`.github/workflows/*.yml`, `.gitlab-ci.yml`, …) that runs the deploy adapter on every push, plus the rest of the build pipeline (typecheck, test, lint). v1 candidates: `cicd-github-actions`, `cicd-gitlab-ci`. The yaml lives inside a component or recipe's `template/` like any other file, parameterised through the same prompt + Nunjucks pipeline.
+- **CI/CD provider** — emits the workflow yaml (`.github/workflows/*.yml`, `.gitlab-ci.yml`, …) that runs the deploy adapter on every push, plus the rest of the build pipeline (typecheck, test, lint). v1 candidates: `cicd-github-actions`, `cicd-gitlab-ci`. The yaml lives in the artifact's root scaffolding like any other file, parameterised through the same prompt + Nunjucks pipeline.
 
 **Why both, not just one.** First push is from the developer's machine — `hex deploy` puts the app live before the repo even exists on a remote. Every push after that is from CI — the yaml owns deployment forever. Without the local path, "zero to dev" requires "first set up CI/CD." Without the CI/CD path, "team mode" requires every developer to run `hex deploy` from their laptop. Both have to work, day one.
 
@@ -303,7 +348,7 @@ cicd:
 
 **Component step contribution** (deferred). In a multi-component recipe, you'd want each component to contribute pipeline steps (typecheck, test, lint, migrate, …) via `provides:`, with the CI/CD provider assembling the final workflow from contributions plus the deploy step. Useful, but deferred — v1 keeps the yaml simple, owned by the recipe (or standalone component) directly, with each template carrying its own steps inline. Step contribution lands once we have real multi-component recipes that need it.
 
-**Tradeoff.** This adds two pluggable layers to early v1 instead of saving them for the end. Cost is acceptable because the SPA template (the second template after CLI — see Slice 2) is the natural place to prove both, and "zero to dev" doesn't sing without them.
+**Tradeoff.** Phase 2 ships the *minimum viable* deploy stack — one adapter + one provider — and nothing else. Step contribution from components into the CI workflow (each component declaring its own typecheck / test / migrate steps for the provider to assemble) is deferred until composition lands in Phase 3, since it has no meaning for standalone components. Additional adapters and providers ship later through the marketplace (Phase 5). The temptation to bundle a second template plus multi-adapter / multi-provider matrices into "the deploy milestone" is what blew the scope last time around — Phase 2 stays small and focused.
 
 ## Open threads
 
@@ -311,36 +356,70 @@ _(All major threads landed — see Section 5 for the templating-context refineme
 
 ## Incremental build plan
 
-Every slice leaves a usable tool. Upgrade (Slice 6) sits before contracts (Slice 7) on purpose — it's the hardest, most load-bearing piece, so we de-risk it with a single component before building multi-component abstractions on top. Deployment + CI/CD land early (Slice 2) because "zero to dev" is the headline pitch and doesn't sing without them. Marketplace infra is deliberately late.
+Six phases, each ending with a standalone tool that delivers value on its own. Deployment is Phase 2 because "zero to dev" is what makes scaffolding feel like infrastructure rather than a one-shot generator (Section 10). Composition (Phase 3) and the trust+stub stack (Phase 4) build on those rails. Marketplace + policy is Phase 5. Upgrade — the differentiator over Cookiecutter-style scaffolders — is parked for last (Phase 6); tolerable because Phases 1–5 already give adopters a configurable, composable, deployable scaffolder. Until upgrade lands they regenerate-and-merge the way they would with any other tool.
 
-**Slice 1 — Single local component, prompts, render.**
-Node + TS CLI (Section 8). Component on disk with manifest + `template/`, fetched via `FileSource` (Section 9). Prompts (`@clack/prompts`-style), renders to an output path using Nunjucks (sandboxed). Hooks: declarative-only at this slice; JS-on-WASM (Section 7) lands when fetched code is no longer trusted (Slice 4). First template: a Node + TS CLI (with self-update) — extracted from Hex itself. **Already useful**: Cookiecutter-equivalent minus catalogue.
+### Phase 1 — Configurable scaffolder (the baseline)
 
-**Slice 2 — SPA template + deployment + CI/CD ("zero to dev" lands).**
-Second template: Svelte SPA. First deploy adapter (Vercel or Cloudflare Pages) and first CI/CD provider (`cicd-github-actions`) — see Section 10. `hex deploy` works from a developer's machine; the rendered template ships with a workflow yaml that takes over deployment on every push after the repo lands on a remote. Standalone components only at this slice — no recipes yet. **The pitch is now demoable**: a teammate can hit a URL within minutes of `hex new svelte-spa`.
+A configurable Cookiecutter with a browse experience. Adoptable on its own.
 
-**Slice 3 — Recipe composing multiple local children.**
-A recipe (`type: recipe`) references N local children. Hex resolves, prompts recipe-level then per-child, places each child in its own subdirectory, and emits root-level orchestration from the recipe's own `template/`. Children are self-contained subtrees — no file-merge by construction. Still `FileSource` only. **Real multi-component applications now buildable.**
+**M1 — Single template, prompts, render.**
+Node + TS CLI (Section 8). Template on disk with `.hex/manifest.yaml` + scaffolding files at the artifact root (see "Component repo layout"), fetched via `FileSource` (Section 9). Engine skips `.hex/` and honours `.hexignore` during render. Prompts (`@clack/prompts`-style) declared in the manifest's `prompts:` (Section 5) and processed by the engine itself — answers feed Nunjucks substitution into file contents and filenames; manifest-level conditional file inclusion gates whole-file emission. Hooks: declarative-only (inline in `manifest.yaml`); JS-on-WASM (Section 7) is deferred until untrusted code execution is on the table (M7). First template: a Node + TS CLI (with self-update), extracted from Hex itself. **Already useful**: Cookiecutter-equivalent without composition.
 
-**Slice 4 — `GitSource` + JS hook sandbox.**
-Adds `GitSource` (Section 9): components fetched from git URL + tag, cached locally. No registry infra yet. JS hooks (Section 7) now run in QuickJS-WASM since fetched code is no longer trusted; local-path components keep the unsandboxed path behind `--trust-local`. **Teams can share components.**
+**M2 — Configurable source roots + discovery.**
+`~/.hex/config.yaml` lists source roots — local directories first, more URL forms in M3. `hex list` enumerates templates across configured roots; `hex new` lets the user pick interactively. This is what makes Hex a configurable tool rather than a "point it at a path" wrapper. Discovery is read-side only at this stage — no `Catalogue` interface, no marketplace IDs, no override/block policy (Section 9 "Discovery model" — full model lands with M9), just a walk of configured roots.
 
-**Slice 5 — Lockfile.**
-`hex-lock.yml` records recipe + components + versions + answers + hashes. Generated app becomes self-describing. Sets the table for Slice 6.
+**M3 — `GitSource`.**
+Source roots can now point at git URLs / git org listings. Components fetched by URL + tag, cached locally. Declarative hooks remain the only hook tier — no untrusted code execution yet, so no QuickJS sandbox required. Auth via standard git credentials (Section 9). **Teams can share templates.**
 
-**Slice 6 — Upgrade engine (the differentiator).**
-Pristine reconstruction, stepwise chain, 3-way merge, `hex upgrade --continue`, migration script vocabulary (`rename` / `delete_if_unmodified` / `replace` / …). **Hex stops being "another scaffolder".**
+End of Phase 1: a configurable scaffolder with a browse experience, fetching from local paths or git. Adoptable.
 
-**Slice 7 — Contracts (`provides` / `consumes` / `requires`) + swap.**
-Typed slots in recipes; kind-based resolution; peer-presence assertions checked at resolve time. Swap `api-express` for `api-fastify` (or `db-mysql` for `db-postgres`) with one recipe edit and a regenerate. **Pluggability becomes real.** Cross-component data migration across a swap is *not* in scope (see "Deliberately not in 1.0").
+### Phase 2 — Zero to dev
 
-**Slice 8 — Stub integration.**
-Stub is a component satisfying the same contract as the real thing. Integrations with the first 1–2 external stub engines. **Stubbing pitch lands.**
+Deployment is as load-bearing as scaffolding itself; without it, "zero to dev" stops at "files on disk."
 
-**Slice 9 — Marketplace / registry + package format.**
-Publish, discover, version. Website + index. Adds `MarketplaceSource` plus the `Catalogue` discovery interface (Section 9) — third source on the fetch side, first and only catalogue on the discovery side. Additional deploy adapters and CI/CD providers (Section 10) ship through the marketplace once it's live — `cicd-gitlab-ci`, `cloudflare-pages-deploy`, etc.
+**M4 — Deploy adapter + CI/CD provider.**
+First deploy adapter (Vercel or Cloudflare Pages) and first CI/CD provider (`cicd-github-actions`) — see Section 10. `hex deploy` works from a developer's machine; rendered templates ship workflow yaml that takes over deployment on every push after the repo lands on a remote. Standalone components only at this phase — recipe-level deploy lands once recipes do (Phase 3). The minimum viable stack: one adapter, one provider, no step contribution yet (deferred to Phase 3 alongside contracts). **Zero to dev lands.**
 
-Tradeoff flagged: **Slice 5 has no visible user value by itself** — it's scaffolding for Slice 6. Could fold into Slice 6; keeping them separate buys a smaller Slice 6 and an inspectable artifact along the way.
+### Phase 3 — Composition
+
+**M5 — Recipes composing children from any source.**
+A recipe (`type: recipe`) declares `composes:` and references children by name+version; each entry resolves through whichever `Source` matches its URL form (file, git, …). Source is a per-dependency concern (Section 9), not a phase-gated capability — by M5 both `FileSource` and `GitSource` already exist. Hex resolves, prompts recipe-level then per-child, places each child in its own subdirectory, and emits root-level orchestration from the recipe's own scaffolding. Children are self-contained subtrees — no file-merge by construction. **Real multi-component applications buildable.**
+
+**M6 — Contracts (`provides` / `consumes` / `requires`) + swap.**
+Typed slots in recipes; kind-based resolution; peer-presence assertions checked at resolve time. Swap `api-express` for `api-fastify` (or `db-mysql` for `db-postgres`) with one recipe edit and a regenerate. Swap is **structural only** — the scaffolded shape changes; data does not migrate (see "Deliberately not in 1.0"). **Pluggability becomes real.**
+
+### Phase 4 — Trust & extensibility
+
+**M7 — JS hook sandbox.**
+QuickJS-WASM (Section 7) goes in. Fetched components — git or marketplace — can now ship JS hooks safely. Local-path components keep an unsandboxed path behind `--trust-local`. The trust gradient becomes real: declarative-only is no longer the only option for marketplace-grade components.
+
+**M8 — Stub integration.**
+A stub is a component satisfying the same contract as the real thing (Section 6). Integrations with the first 1–2 external stub engines (pg-mem, MSW, …). Soft dep on M7 — purely declarative stub setups work without it. **Stubbing pitch lands.**
+
+### Phase 5 — Marketplace + policy
+
+**M9 — Marketplace / registry + `Catalogue` + policy model.**
+Publish, discover, version. Website + index. Adds `MarketplaceSource` plus the `Catalogue` discovery interface (Section 9) — third source on the fetch side, first and only catalogue on the discovery side. `hex search` / `hex browse` start surfacing results from the registry. The two-layer discovery model lands here in full: marketplace IDs as namespaces (`hex/`, `acme/`), arrays of company marketplaces aggregated flat, qualified-name addressing, and hard block/override mechanics hosted inside company marketplaces (Section 9 "Discovery model"). Granularity is by qualified name only — no version ranges, no tag filters. Additional deploy adapters and CI/CD providers also start shipping through the marketplace once it's live (`cicd-gitlab-ci`, `cloudflare-pages-deploy`, …).
+
+### Phase 6 — Upgrade
+
+The differentiator over Cookiecutter-style scaffolders. Parked last because it's the hardest piece and Phases 1–5 are usable without it.
+
+**M10 — Lockfile.**
+`.hex/lockfile.yaml` (in the generated app's `.hex/` folder, see "Component repo layout") records recipe + components + versions + answers + hashes. Generated app becomes self-describing. No visible user value on its own — sets the table for M11.
+
+**M11 — Upgrade engine.**
+Pristine reconstruction, stepwise chain, 3-way merge, `hex upgrade --continue`, migration script vocabulary (`rename` / `delete_if_unmodified` / `replace` / …). **Hex stops being "another scaffolder."**
+
+End of Phase 6: 1.0.
+
+### Tradeoffs flagged
+
+- **Upgrade lands last, not first.** The original plan put upgrade early as the differentiator; this reorganisation defers it because deployment + composition + marketplace deliver more visible value sooner. Risk: by the time M11 ships, adopters have built their own regenerate-and-merge workflows and the differentiator differentiates less. Accepted for early-phase momentum.
+- **M10 has no visible user value by itself** — it's scaffolding for M11. Could fold into M11; keeping them separate buys a smaller M11 and an inspectable artifact along the way.
+- **Phase 1 discovery (M2) is read-side only.** No `Catalogue` interface, no signed packages, no semver search. The CLI just walks configured roots. The full `Catalogue` lands in M9 with the marketplace.
+- **Recipe-level deploy lands in Phase 3, not Phase 2.** Phase 2's deploy applies to standalone components only; multi-component recipes need the recipe machinery, which arrives in M5. Until then, deploy means "scaffold a single component and deploy that one thing."
+- **Additional templates are not milestones, they're usage.** A Svelte SPA, a Django backend, an Astro blog — these are templates somebody authors and points Hex at. Worth seeding 1–2 reference templates during Phase 1 to dogfood, but they do not gate any phase.
 
 ## Prior art
 
