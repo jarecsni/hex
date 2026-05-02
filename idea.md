@@ -190,6 +190,37 @@ Components can read recipe-level answers (so a child can branch on `containerize
 
 Refinement TBD: exact answer-tree shape (sibling-presence flags, whether component top-level answers nest under `answers.<component_kind>.*` or `answers.components.<name>.*`). Treat as a refinement, not a blocker.
 
+**Prompt types — type-driven widgets.** Each prompt declares a `type:`; the engine maps it to the right `@clack/prompts` primitive (Section 8) and validates the answer against the type before storing it.
+
+```yaml
+prompts:
+  - project_name: { type: string, required: true }
+  - port:         { type: integer, default: 3000 }
+  - containerize: { type: boolean, default: true }
+  - license:
+      type: enum
+      choices: [MIT, Apache-2.0, BSD-3-Clause]
+      default: MIT
+  # shorthand sugar for the trivial cases:
+  - framework: [react, vue, svelte]   # YAML array → enum, first item is default
+  - debug: false                       # bare boolean → boolean prompt with that default
+  - replicas: 3                        # bare integer → integer prompt with that default
+```
+
+| Type | Widget | Notes |
+|------|--------|-------|
+| `string` | `text()` | Optional `pattern:` (regex) for validation |
+| `integer` / `number` | `text()` | Numeric validation; optional `min:` / `max:` |
+| `boolean` | `confirm()` | y/n |
+| `enum` | `select()` | Single choice from `choices:` |
+| `multi` | `multiselect()` | Multiple choices from `choices:` |
+| `password` | `password()` | Masked entry; never logged, never written to lockfile |
+| `path` | `text()` | Validates path existence (configurable: `must_exist: true\|false`) |
+
+Cross-cutting fields all prompts accept: `default:`, `required:` (defaults true if no `default:`), `description:` (shown to the user), `when:` (Nunjucks expression evaluated against already-collected answers — prompt is skipped when false). `when:` lets later prompts depend on earlier ones (e.g. only ask `db_port` if `containerize` is true) without leaving the manifest's structure flat.
+
+The shorthand sugar is purely a parser-level desugaring — the engine canonicalises every prompt to the long form (`{ type, default, required, ... }`) before processing. Authors can mix shorthand and long form freely.
+
 ### 6. Stubbing — components ship their own stub support
 
 Stubs are a **dev + CI** concern. The contract work in Section 2 makes them mostly fall out for free.
