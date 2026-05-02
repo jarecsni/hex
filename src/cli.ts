@@ -3,6 +3,7 @@ import { Command } from 'commander';
 import { brand } from './brand/colors.js';
 import { VERSION, splash } from './brand/splash.js';
 import { registerDoctor } from './commands/doctor.js';
+import { registerNew } from './commands/new.js';
 import { maybeUpdate } from './update.js';
 
 process.on('exit', () => {
@@ -20,6 +21,7 @@ async function main() {
     .addHelpText('beforeAll', `${splash()}\n`);
 
   registerDoctor(program);
+  registerNew(program);
 
   await program.parseAsync(process.argv);
 }
