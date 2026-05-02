@@ -1,11 +1,25 @@
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { brand } from './colors.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const pkgPath = resolve(__dirname, '..', 'package.json');
-const pkg = JSON.parse(readFileSync(pkgPath, 'utf-8')) as { version: string };
+
+function findPackageJson(start: string): string {
+  // Walk up until package.json is found. Works in both the bundled case
+  // (dist/cli.js, repo root one level up) and the tsx-from-source case
+  // (src/brand/splash.ts, repo root two levels up).
+  let dir = start;
+  while (true) {
+    const candidate = resolve(dir, 'package.json');
+    if (existsSync(candidate)) return candidate;
+    const parent = dirname(dir);
+    if (parent === dir) throw new Error('package.json not found above splash module');
+    dir = parent;
+  }
+}
+
+const pkg = JSON.parse(readFileSync(findPackageJson(__dirname), 'utf-8')) as { version: string };
 
 export const VERSION = pkg.version;
 const TAGLINE = 'Application Stack Composer';

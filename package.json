@@ -1,6 +1,6 @@
 {
   "name": "@hexology/hex",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Scaffolding tool that assembles applications from templated components — honeycomb-style.",
   "keywords": [
     "scaffolding",
@@ -13,13 +13,13 @@
     "hex",
     "hexology"
   ],
-  "homepage": "https://github.com/jarecsni/hex#readme",
+  "homepage": "https://github.com/textologylabs/hex#readme",
   "bugs": {
-    "url": "https://github.com/jarecsni/hex/issues"
+    "url": "https://github.com/textologylabs/hex/issues"
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/jarecsni/hex.git"
+    "url": "git+https://github.com/textologylabs/hex.git"
   },
   "author": "Johnny Jarecsni",
   "license": "MIT",
@@ -50,12 +50,18 @@
     "access": "public"
   },
   "dependencies": {
+    "@clack/prompts": "^1.3.0",
     "commander": "^12.1.0",
-    "picocolors": "^1.1.1"
+    "ignore": "^7.0.5",
+    "nunjucks": "^3.2.4",
+    "picocolors": "^1.1.1",
+    "yaml": "^2.8.3",
+    "zod": "^4.4.2"
   },
   "devDependencies": {
     "@biomejs/biome": "^1.9.4",
     "@types/node": "^22.10.0",
+    "@types/nunjucks": "^3.2.6",
     "tsup": "^8.3.5",
     "tsx": "^4.19.2",
     "typescript": "^5.7.2",

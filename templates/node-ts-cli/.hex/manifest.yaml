@@ -1,0 +1,33 @@
+type: component
+name: node-ts-cli
+version: 0.1.0
+kind: cli
+
+prompts:
+  - project_name:
+      type: string
+      required: true
+      description: Package name (e.g. my-cli)
+      pattern: '^[a-z][a-z0-9-]*$'
+  - description:
+      type: string
+      default: ''
+      description: Short description
+  - author:
+      type: string
+      default: ''
+      description: Author
+  - license:
+      type: enum
+      choices: [MIT, Apache-2.0]
+      default: MIT
+      description: License
+  - include_examples:
+      type: boolean
+      default: true
+      description: Include an example "hello" command?
+
+hooks:
+  post_render:
+    - rename: { from: gitignore, to: .gitignore }
+    - delete: { glob: 'src/examples/**', when: 'not include_examples' }
