@@ -1,6 +1,10 @@
 #!/usr/bin/env node
 import { Command } from 'commander';
 
+process.on('exit', () => {
+  if (process.stdout.isTTY) process.stdout.write('\n');
+});
+
 const program = new Command();
 
 program
