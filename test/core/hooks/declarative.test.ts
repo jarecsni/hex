@@ -62,11 +62,25 @@ describe('runPostRenderHooks — rename', () => {
     ).rejects.toThrow(HookError);
   });
 
-  it('errors when target already exists', async () => {
+  it('errors when target already exists (without force)', async () => {
     const written = await setupOutput({ gitignore: 'x', '.gitignore': 'y' });
     await expect(
       runPostRenderHooks(work, [{ rename: { from: 'gitignore', to: '.gitignore' } }], {}, written),
     ).rejects.toThrow(HookError);
+  });
+
+  it('overwrites an existing target when force=true', async () => {
+    const written = await setupOutput({ gitignore: 'fresh', '.gitignore': 'stale' });
+    const result = await runPostRenderHooks(
+      work,
+      [{ rename: { from: 'gitignore', to: '.gitignore' } }],
+      {},
+      written,
+      { force: true },
+    );
+    expect(result.renamed).toEqual([{ from: 'gitignore', to: '.gitignore' }]);
+    expect(existsSync(join(work, 'gitignore'))).toBe(false);
+    expect(await readFile(join(work, '.gitignore'), 'utf8')).toBe('fresh');
   });
 });
 

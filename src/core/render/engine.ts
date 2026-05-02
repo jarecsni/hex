@@ -110,7 +110,9 @@ export async function renderBundle(
   }
 
   const hooks = bundle.manifest.hooks?.post_render ?? [];
-  const hookResult = await runPostRenderHooks(absOut, hooks, answers, written);
+  const hookResult = await runPostRenderHooks(absOut, hooks, answers, written, {
+    force: opts.force ?? false,
+  });
 
   return { written, ...hookResult };
 }

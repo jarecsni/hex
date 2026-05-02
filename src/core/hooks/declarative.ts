@@ -26,6 +26,11 @@ async function pathExists(p: string): Promise<boolean> {
   }
 }
 
+export type RunHooksOptions = {
+  /** When true, rename hooks may overwrite an existing target. */
+  force?: boolean;
+};
+
 /**
  * Run declarative post-render hooks against an output tree.
  *
@@ -37,19 +42,24 @@ async function pathExists(p: string): Promise<boolean> {
  * Each hook's `when:` expression is evaluated against the same answers
  * tree the prompts and include rules saw. Hooks with a falsy `when:` are
  * silently skipped.
+ *
+ * `force` is propagated from the render call: when true, rename hooks
+ * may replace an existing target rather than erroring out.
  */
 export async function runPostRenderHooks(
   outputPath: string,
   hooks: PostRenderHook[],
   answers: Answers,
   writtenFiles: string[],
+  opts: RunHooksOptions = {},
 ): Promise<HookResult> {
   const live = new Set(writtenFiles);
   const result: HookResult = { renamed: [], deleted: [] };
+  const force = opts.force ?? false;
 
   for (const hook of hooks) {
     if ('rename' in hook) {
-      await applyRename(hook.rename, outputPath, answers, live, result);
+      await applyRename(hook.rename, outputPath, answers, live, result, force);
     } else {
       await applyDelete(hook.delete, outputPath, answers, live, result);
     }
@@ -64,6 +74,7 @@ async function applyRename(
   answers: Answers,
   live: Set<string>,
   result: HookResult,
+  force: boolean,
 ): Promise<void> {
   if (rule.when && !evalWhen(rule.when, answers)) return;
   const fromAbs = join(outputPath, rule.from);
@@ -72,7 +83,10 @@ async function applyRename(
     throw new HookError(`rename: source not found in output tree: ${rule.from}`);
   }
   if (await pathExists(toAbs)) {
-    throw new HookError(`rename: target already exists: ${rule.to}`);
+    if (!force) {
+      throw new HookError(`rename: target already exists: ${rule.to}`);
+    }
+    await rm(toAbs, { force: true, recursive: true });
   }
   await mkdir(dirname(toAbs), { recursive: true });
   await rename(fromAbs, toAbs);
