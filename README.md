@@ -1,6 +1,6 @@
 # @hexology/hex
 
-Scaffolding tool that assembles applications from templated components — honeycomb-style. Part of the [Hexology](https://github.com/jarecsni/hex) toolset.
+Scaffolding tool that assembles applications from templated components — honeycomb-style. Part of the [Hexology](https://github.com/textologylabs/hex) toolset.
 
 Status: **0.1.0 — CLI scaffold only, not yet published.** No render, no recipes yet. See [`idea.md`](./idea.md) for the design and [`CHANGELOG.md`](./CHANGELOG.md) for what's in.
 

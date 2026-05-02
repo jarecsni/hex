@@ -13,13 +13,13 @@
     "hex",
     "hexology"
   ],
-  "homepage": "https://github.com/jarecsni/hex#readme",
+  "homepage": "https://github.com/textologylabs/hex#readme",
   "bugs": {
-    "url": "https://github.com/jarecsni/hex/issues"
+    "url": "https://github.com/textologylabs/hex/issues"
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/jarecsni/hex.git"
+    "url": "git+https://github.com/textologylabs/hex.git"
   },
   "author": "Johnny Jarecsni",
   "license": "MIT",
