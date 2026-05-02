@@ -71,12 +71,18 @@ export type Hooks = {
 
 export type IncludeRule = { path: string; when: string } | { glob: string; when: string };
 
+export type Section = {
+  title: string;
+  prompts: string[];
+};
+
 export type Manifest = {
   type: 'component' | 'recipe';
   name: string;
   version: string;
   kind?: string;
   prompts?: Prompt[];
+  sections?: Section[];
   hooks?: Hooks;
   include?: IncludeRule[];
 };

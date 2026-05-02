@@ -26,6 +26,27 @@ prompts:
       type: boolean
       default: true
       description: Include an example "hello" command?
+  - include_self_update:
+      type: boolean
+      default: true
+      description: Include a self-update prompt on launch?
+
+# Section grouping drives the questionnaire UX — outline shown up front,
+# header per section, (N/M) progress per question. Every prompt must be
+# assigned exactly once.
+sections:
+  - title: Basics
+    prompts: [project_name, description, author]
+  - title: Licence
+    prompts: [license]
+  - title: Features
+    prompts: [include_examples, include_self_update]
+
+# `include:` gates whole files; the `delete` hook below clears subtrees.
+# Use `include:` for single-file gating (one rule per file) and the
+# `delete` hook for many-file subtree gating against a glob.
+include:
+  - { path: 'src/update.ts', when: 'include_self_update' }
 
 hooks:
   post_render:

@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `hex list` — enumerate templates discovered across configured source roots. `--json` for scriptable output.
+- `~/.hex/config.yaml` (overridable via `HEX_CONFIG_DIR`) — declares `sources:` for template discovery. `~`-expansion and config-relative path resolution. Empty / missing file is treated as no sources, not an error.
+- `hex new` interactive picker: when invoked with no `<template>` argument, lists templates from configured sources and lets the user pick. Bare names resolve via discovery; path-shaped args (`./foo`, `/abs`, `~/x`, anything with a separator) bypass discovery and load directly. Output directory is also prompted when omitted.
+- Manifest `sections:` — optional grouping of prompts into named sections, with strict coverage validation (every prompt classified exactly once). Drives the questionnaire UX: an outline up front, a section header per group ("Section 1 of 5 — Basics"), and `(N/M)` per-question progress. Sections whose prompts are all `when:`-skipped suppress their header. Manifests without `sections:` continue to render flat.
+- `node-ts-cli` template: `include_self_update` prompt (default true) gates a templated `src/update.ts` and the corresponding wiring in `src/cli.ts`. The ported self-update flow is deps-free (raw ANSI, no picocolors), reads VERSION from the generated app's own `package.json` at runtime, and respects `NO_UPDATE_CHECK=1`. Template manifest now uses `sections:` (Basics / Licence / Features).
+
+### Changed
+
+- `Prompter` interface gains optional UI hooks (`outline`, `sectionStart`, `sectionEnd`, `progress`). Existing scripted prompters omit them with no behavioural change.
+
 ## [0.3.0] — 2026-05-02
 
 ### Added

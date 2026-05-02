@@ -15,7 +15,7 @@ export class SourceError extends Error {
   }
 }
 
-const MANIFEST_CANDIDATES = ['manifest.yaml', 'manifest.yml'];
+export const MANIFEST_CANDIDATES = ['manifest.yaml', 'manifest.yml'];
 
 async function isFile(path: string): Promise<boolean> {
   try {
@@ -25,11 +25,22 @@ async function isFile(path: string): Promise<boolean> {
   }
 }
 
-async function findManifest(rootPath: string): Promise<string> {
+/**
+ * Locate `.hex/manifest.{yaml,yml}` under a candidate template root,
+ * returning the first match. Exported so the discovery walker can reuse
+ * the candidate-file logic.
+ */
+export async function findManifestFile(rootPath: string): Promise<string | null> {
   for (const name of MANIFEST_CANDIDATES) {
     const candidate = join(rootPath, '.hex', name);
     if (await isFile(candidate)) return candidate;
   }
+  return null;
+}
+
+async function findManifest(rootPath: string): Promise<string> {
+  const found = await findManifestFile(rootPath);
+  if (found) return found;
   throw new SourceError(
     `no manifest found in ${rootPath}/.hex/ — expected one of: ${MANIFEST_CANDIDATES.join(', ')}`,
   );
