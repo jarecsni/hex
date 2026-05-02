@@ -1,4 +1,4 @@
-import { mkdir, rename, rm, stat } from 'node:fs/promises';
+import { mkdir, readdir, rename, rm, stat } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import ignore from 'ignore';
 import type { PostRenderHook } from '../manifest/types.js';
@@ -112,6 +112,7 @@ async function applyDelete(
     await rm(abs, { force: true, recursive: true });
     live.delete(rule.path);
     result.deleted.push(rule.path);
+    await pruneEmptyAncestors(outputPath, rule.path);
     return;
   }
 
@@ -121,5 +122,34 @@ async function applyDelete(
     await rm(join(outputPath, m), { force: true });
     live.delete(m);
     result.deleted.push(m);
+  }
+  // After all glob matches have been removed, sweep any now-empty
+  // ancestor directories. Walking deepest-first means we remove
+  // children before their parents, so a fully-gutted subtree
+  // collapses cleanly back to the first non-empty ancestor.
+  for (const m of matches) {
+    await pruneEmptyAncestors(outputPath, m);
+  }
+}
+
+/**
+ * Walk up from `relativePath`'s directory and remove any directory
+ * that is now empty, stopping at the output root or the first
+ * non-empty ancestor. Errors (missing dirs, races) are swallowed —
+ * the caller has already done the destructive work; pruning is
+ * best-effort cleanup.
+ */
+async function pruneEmptyAncestors(outputPath: string, relativePath: string): Promise<void> {
+  let rel = dirname(relativePath);
+  while (rel && rel !== '.' && rel !== '/') {
+    const abs = join(outputPath, rel);
+    try {
+      const entries = await readdir(abs);
+      if (entries.length > 0) return;
+      await rm(abs, { recursive: false });
+    } catch {
+      return;
+    }
+    rel = dirname(rel);
   }
 }
