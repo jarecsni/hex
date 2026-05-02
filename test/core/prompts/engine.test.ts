@@ -1,11 +1,14 @@
 import { describe, expect, it } from 'vitest';
-import type { Prompt } from '../../../src/core/manifest/types.js';
+import type { Prompt, Section } from '../../../src/core/manifest/types.js';
 import { runPrompts } from '../../../src/core/prompts/engine.js';
 import type {
   ConfirmOpts,
   MultiSelectOpts,
+  OutlineEntry,
   PasswordOpts,
+  ProgressInfo,
   Prompter,
+  SectionInfo,
   SelectOpts,
   TextOpts,
 } from '../../../src/core/prompts/types.js';
@@ -167,5 +170,169 @@ describe('runPrompts', () => {
     ];
     const { prompter } = scriptedPrompter([{ kind: 'text', value: '0' }]);
     await expect(runPrompts(prompts, prompter)).rejects.toThrow(/must be >= 1/);
+  });
+});
+
+type RecordedEvent =
+  | { kind: 'outline'; entries: OutlineEntry[] }
+  | { kind: 'sectionStart'; info: SectionInfo }
+  | { kind: 'sectionEnd'; info: SectionInfo }
+  | { kind: 'progress'; info: ProgressInfo }
+  | { kind: 'ask'; name: string };
+
+function recordingPrompter(scripted: ScriptedAnswer[]): {
+  prompter: Prompter;
+  events: RecordedEvent[];
+} {
+  const events: RecordedEvent[] = [];
+  let cursor = 0;
+  const next = (kind: ScriptedAnswer['kind']): ScriptedAnswer => {
+    const a = scripted[cursor++];
+    if (!a) throw new Error('recording prompter ran out of answers');
+    if (a.kind !== kind) throw new Error(`expected ${kind}, got ${a.kind}`);
+    return a;
+  };
+  const prompter: Prompter = {
+    async text(opts) {
+      events.push({ kind: 'ask', name: opts.message });
+      return (next('text') as { kind: 'text'; value: string }).value;
+    },
+    async confirm(opts) {
+      events.push({ kind: 'ask', name: opts.message });
+      return (next('confirm') as { kind: 'confirm'; value: boolean }).value;
+    },
+    async select(opts) {
+      events.push({ kind: 'ask', name: opts.message });
+      return (next('select') as { kind: 'select'; value: string }).value;
+    },
+    async multiselect(opts) {
+      events.push({ kind: 'ask', name: opts.message });
+      return (next('multi') as { kind: 'multi'; value: string[] }).value;
+    },
+    async password(opts) {
+      events.push({ kind: 'ask', name: opts.message });
+      return (next('password') as { kind: 'password'; value: string }).value;
+    },
+    outline(entries) {
+      events.push({ kind: 'outline', entries });
+    },
+    sectionStart(info) {
+      events.push({ kind: 'sectionStart', info });
+    },
+    sectionEnd(info) {
+      events.push({ kind: 'sectionEnd', info });
+    },
+    progress(info) {
+      events.push({ kind: 'progress', info });
+    },
+  };
+  return { prompter, events };
+}
+
+describe('runPrompts — sections', () => {
+  it('emits outline + section markers + progress when sections are declared', async () => {
+    const prompts: Prompt[] = [
+      { name: 'name', def: { type: 'string', default: 'demo' } },
+      { name: 'port', def: { type: 'integer', default: 3000 } },
+      { name: 'license', def: { type: 'enum', choices: ['MIT'], default: 'MIT' } },
+    ];
+    const sections: Section[] = [
+      { title: 'Basics', prompts: ['name', 'port'] },
+      { title: 'Licence', prompts: ['license'] },
+    ];
+    const { prompter, events } = recordingPrompter([
+      { kind: 'text', value: 'demo' },
+      { kind: 'text', value: '3000' },
+      { kind: 'select', value: 'MIT' },
+    ]);
+    await runPrompts(prompts, prompter, {}, sections);
+
+    const outline = events.find((e) => e.kind === 'outline') as
+      | { kind: 'outline'; entries: OutlineEntry[] }
+      | undefined;
+    expect(outline?.entries).toEqual([
+      { title: 'Basics', promptCount: 2 },
+      { title: 'Licence', promptCount: 1 },
+    ]);
+
+    const starts = events.filter((e) => e.kind === 'sectionStart');
+    expect(starts).toHaveLength(2);
+    const firstStart = starts[0] as { kind: 'sectionStart'; info: SectionInfo };
+    expect(firstStart.info).toMatchObject({ index: 1, total: 2, title: 'Basics' });
+
+    const progress = events.filter((e) => e.kind === 'progress') as Array<{
+      kind: 'progress';
+      info: ProgressInfo;
+    }>;
+    expect(progress).toHaveLength(3);
+    expect(progress[0]?.info).toMatchObject({
+      sectionIndex: 1,
+      sectionTotal: 2,
+      promptIndex: 1,
+      promptTotal: 2,
+    });
+    expect(progress[2]?.info).toMatchObject({
+      sectionIndex: 2,
+      sectionTotal: 2,
+      promptIndex: 1,
+      promptTotal: 1,
+    });
+  });
+
+  it('skips a section whose every prompt is when:-skipped — no header, no progress', async () => {
+    const prompts: Prompt[] = [
+      { name: 'enable_db', def: { type: 'boolean', default: false } },
+      { name: 'db_host', def: { type: 'string', default: 'localhost', when: 'enable_db' } },
+      { name: 'db_port', def: { type: 'integer', default: 5432, when: 'enable_db' } },
+    ];
+    const sections: Section[] = [
+      { title: 'Main', prompts: ['enable_db'] },
+      { title: 'Database', prompts: ['db_host', 'db_port'] },
+    ];
+    const { prompter, events } = recordingPrompter([{ kind: 'confirm', value: false }]);
+    await runPrompts(prompts, prompter, {}, sections);
+
+    const starts = events.filter((e) => e.kind === 'sectionStart') as Array<{
+      kind: 'sectionStart';
+      info: SectionInfo;
+    }>;
+    expect(starts).toHaveLength(1);
+    expect(starts[0]?.info.title).toBe('Main');
+
+    // No progress event for the skipped section
+    const progress = events.filter((e) => e.kind === 'progress');
+    expect(progress).toHaveLength(1);
+  });
+
+  it('promptIndex stays stable when a same-section prompt is when:-skipped', async () => {
+    const prompts: Prompt[] = [
+      { name: 'use_jwt', def: { type: 'boolean', default: true } },
+      { name: 'jwt_secret', def: { type: 'string', default: 'shh', when: 'use_jwt' } },
+      { name: 'audience', def: { type: 'string', default: 'web' } },
+    ];
+    const sections: Section[] = [{ title: 'Auth', prompts: ['use_jwt', 'jwt_secret', 'audience'] }];
+    const { prompter, events } = recordingPrompter([
+      { kind: 'confirm', value: false },
+      { kind: 'text', value: 'web' },
+    ]);
+    await runPrompts(prompts, prompter, {}, sections);
+
+    const progress = events.filter((e) => e.kind === 'progress') as Array<{
+      kind: 'progress';
+      info: ProgressInfo;
+    }>;
+    expect(progress).toHaveLength(2);
+    // First fires at slot 1 of 3; jwt_secret skipped; audience fires at slot 3 of 3.
+    expect(progress[0]?.info).toMatchObject({ promptIndex: 1, promptTotal: 3 });
+    expect(progress[1]?.info).toMatchObject({ promptIndex: 3, promptTotal: 3 });
+  });
+
+  it('emits no outline / no section markers for a flat manifest (no sections)', async () => {
+    const prompts: Prompt[] = [{ name: 'x', def: { type: 'string', default: 'hi' } }];
+    const { prompter, events } = recordingPrompter([{ kind: 'text', value: 'hi' }]);
+    await runPrompts(prompts, prompter);
+    expect(events.some((e) => e.kind === 'outline')).toBe(false);
+    expect(events.some((e) => e.kind === 'sectionStart')).toBe(false);
+    expect(events.some((e) => e.kind === 'progress')).toBe(false);
   });
 });

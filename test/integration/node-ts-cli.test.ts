@@ -20,13 +20,16 @@ afterEach(async () => {
   await rm(work, { recursive: true, force: true });
 });
 
-function fixedPrompter(answers: {
+type FixtureAnswers = {
   project_name: string;
   description: string;
   author: string;
   license: string;
   include_examples: boolean;
-}): Prompter {
+  include_self_update: boolean;
+};
+
+function fixedPrompter(answers: FixtureAnswers): Prompter {
   return {
     async text(opts) {
       const map: Record<string, string> = {
@@ -42,6 +45,8 @@ function fixedPrompter(answers: {
     },
     async confirm(opts) {
       if (opts.message === 'Include an example "hello" command?') return answers.include_examples;
+      if (opts.message === 'Include a self-update prompt on launch?')
+        return answers.include_self_update;
       throw new Error(`unexpected confirm prompt: ${opts.message}`);
     },
     async select(opts) {
@@ -58,7 +63,7 @@ function fixedPrompter(answers: {
 }
 
 describe('node-ts-cli template — end-to-end', () => {
-  it('renders a complete project with examples included', async () => {
+  it('renders a complete project with examples + self-update included', async () => {
     const bundle = await loadFromPath(TEMPLATE_PATH);
     const answers = await runPrompts(
       bundle.manifest.prompts ?? [],
@@ -68,7 +73,10 @@ describe('node-ts-cli template — end-to-end', () => {
         author: 'Alice',
         license: 'MIT',
         include_examples: true,
+        include_self_update: true,
       }),
+      {},
+      bundle.manifest.sections,
     );
 
     const out = join(work, 'my-cli');
@@ -84,6 +92,12 @@ describe('node-ts-cli template — end-to-end', () => {
     expect(existsSync(join(out, 'README.md'))).toBe(true);
     expect(existsSync(join(out, 'LICENSE'))).toBe(true);
 
+    // self-update file present and templated
+    expect(existsSync(join(out, 'src/update.ts'))).toBe(true);
+    const update = await readFile(join(out, 'src/update.ts'), 'utf8');
+    expect(update).toContain("PKG_NAME = 'my-cli'");
+    expect(update).toContain('export async function maybeUpdate');
+
     // Rename hook ran
     expect(existsSync(join(out, '.gitignore'))).toBe(true);
     expect(existsSync(join(out, 'gitignore'))).toBe(false);
@@ -97,10 +111,13 @@ describe('node-ts-cli template — end-to-end', () => {
     expect(pkg.bin['my-cli']).toBe('./dist/cli.js');
 
     // cli.ts contains the example command (include_examples = true)
+    // and wires up the self-update call
     const cli = await readFile(join(out, 'src/cli.ts'), 'utf8');
     expect(cli).toContain("'my-cli'");
     expect(cli).toContain('Demo CLI');
     expect(cli).toContain('hello [name]');
+    expect(cli).toContain("import { maybeUpdate } from './update.js'");
+    expect(cli).toContain('await maybeUpdate()');
 
     // LICENSE picked up MIT branch
     const license = await readFile(join(out, 'LICENSE'), 'utf8');
@@ -113,7 +130,7 @@ describe('node-ts-cli template — end-to-end', () => {
     expect(readme).toContain('MIT © Alice');
   });
 
-  it('drops the example command and src/examples/ when include_examples is false', async () => {
+  it('drops example command, src/examples/, and self-update when both are off', async () => {
     const bundle = await loadFromPath(TEMPLATE_PATH);
     const answers = await runPrompts(
       bundle.manifest.prompts ?? [],
@@ -123,7 +140,10 @@ describe('node-ts-cli template — end-to-end', () => {
         author: '',
         license: 'Apache-2.0',
         include_examples: false,
+        include_self_update: false,
       }),
+      {},
+      bundle.manifest.sections,
     );
 
     const out = join(work, 'minimal-cli');
@@ -133,14 +153,46 @@ describe('node-ts-cli template — end-to-end', () => {
     expect(existsSync(join(out, 'src/examples/hello.ts'))).toBe(false);
     expect(result.deleted).toContain('src/examples/hello.ts');
 
-    // cli.ts does NOT include the example block
+    // self-update file was excluded by include: rule (not even rendered)
+    expect(existsSync(join(out, 'src/update.ts'))).toBe(false);
+
+    // cli.ts has neither the example block nor the self-update wiring
     const cli = await readFile(join(out, 'src/cli.ts'), 'utf8');
     expect(cli).not.toContain('hello [name]');
+    expect(cli).not.toContain("from './update.js'");
+    expect(cli).not.toContain('maybeUpdate');
     expect(cli).toContain("'minimal-cli'");
 
     // LICENSE picked up Apache branch
     const license = await readFile(join(out, 'LICENSE'), 'utf8');
     expect(license).toContain('Apache License');
+  });
+
+  it('renders self-update without examples (mixed flags)', async () => {
+    const bundle = await loadFromPath(TEMPLATE_PATH);
+    const answers = await runPrompts(
+      bundle.manifest.prompts ?? [],
+      fixedPrompter({
+        project_name: 'leancli',
+        description: 'lean',
+        author: '',
+        license: 'MIT',
+        include_examples: false,
+        include_self_update: true,
+      }),
+      {},
+      bundle.manifest.sections,
+    );
+
+    const out = join(work, 'leancli');
+    await renderBundle(bundle, out, answers);
+
+    expect(existsSync(join(out, 'src/update.ts'))).toBe(true);
+    expect(existsSync(join(out, 'src/examples/hello.ts'))).toBe(false);
+
+    const cli = await readFile(join(out, 'src/cli.ts'), 'utf8');
+    expect(cli).toContain('await maybeUpdate()');
+    expect(cli).not.toContain('hello [name]');
   });
 
   it('rejects an invalid project_name (pattern fails)', async () => {
@@ -154,7 +206,10 @@ describe('node-ts-cli template — end-to-end', () => {
           author: '',
           license: 'MIT',
           include_examples: true,
+          include_self_update: true,
         }),
+        {},
+        bundle.manifest.sections,
       ),
     ).rejects.toThrow(/must match pattern/);
   });

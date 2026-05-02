@@ -97,22 +97,72 @@ export const includeRuleSchema = z
     message: 'include rule must specify exactly one of path or glob',
   });
 
+export const sectionSchema = z.object({
+  title: z.string().min(1),
+  prompts: z.array(z.string().min(1)).min(1),
+});
+
 const SEMVER_RE = /^\d+\.\d+\.\d+(?:[-+].*)?$/;
 
 // Manifest schema with prompts already desugared (each entry { name, def }).
-export const manifestSchema = z.object({
-  type: z.union([z.literal('component'), z.literal('recipe')]),
-  name: z.string().min(1),
-  version: z.string().regex(SEMVER_RE, 'version must be semver (MAJOR.MINOR.PATCH)'),
-  kind: z.string().optional(),
-  prompts: z
-    .array(
-      z.object({
-        name: z.string().min(1),
-        def: promptDefSchema,
-      }),
-    )
-    .optional(),
-  hooks: hooksSchema.optional(),
-  include: z.array(includeRuleSchema).optional(),
-});
+// `sections:` opts the manifest into total coverage — every prompt must
+// appear in exactly one section, and section entries must reference real
+// prompts. The check fires here (not at engine time) so authoring mistakes
+// surface as parse errors with file paths.
+export const manifestSchema = z
+  .object({
+    type: z.union([z.literal('component'), z.literal('recipe')]),
+    name: z.string().min(1),
+    version: z.string().regex(SEMVER_RE, 'version must be semver (MAJOR.MINOR.PATCH)'),
+    kind: z.string().optional(),
+    prompts: z
+      .array(
+        z.object({
+          name: z.string().min(1),
+          def: promptDefSchema,
+        }),
+      )
+      .optional(),
+    sections: z.array(sectionSchema).optional(),
+    hooks: hooksSchema.optional(),
+    include: z.array(includeRuleSchema).optional(),
+  })
+  .superRefine((manifest, ctx) => {
+    if (!manifest.sections) return;
+
+    const promptNames = new Set((manifest.prompts ?? []).map((p) => p.name));
+    const seen = new Map<string, number>(); // name → section index
+
+    manifest.sections.forEach((section, sIdx) => {
+      section.prompts.forEach((promptName, pIdx) => {
+        if (!promptNames.has(promptName)) {
+          ctx.addIssue({
+            code: 'custom',
+            path: ['sections', sIdx, 'prompts', pIdx],
+            message: `section "${section.title}" references unknown prompt "${promptName}"`,
+          });
+          return;
+        }
+        const previous = seen.get(promptName);
+        if (previous !== undefined) {
+          ctx.addIssue({
+            code: 'custom',
+            path: ['sections', sIdx, 'prompts', pIdx],
+            message: `prompt "${promptName}" appears in multiple sections (also in section ${previous})`,
+          });
+          return;
+        }
+        seen.set(promptName, sIdx);
+      });
+    });
+
+    for (const name of promptNames) {
+      if (!seen.has(name)) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['sections'],
+          message: `prompt "${name}" is not assigned to any section`,
+        });
+      }
+    }
+  });

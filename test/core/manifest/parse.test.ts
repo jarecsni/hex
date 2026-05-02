@@ -215,3 +215,78 @@ describe('parseManifestObject — include rules', () => {
     expect(m.include?.[0]).toEqual({ glob: 'src/**/*.vue', when: 'framework == "vue"' });
   });
 });
+
+describe('parseManifestObject — sections', () => {
+  const promptsFixture = [
+    { name: { type: 'string' } },
+    { description: { type: 'string', default: '' } },
+    { license: { type: 'enum', choices: ['MIT', 'Apache-2.0'], default: 'MIT' } },
+  ];
+
+  it('accepts a manifest with sections covering every prompt', () => {
+    const m = parseManifestObject({
+      ...baseManifest,
+      prompts: promptsFixture,
+      sections: [
+        { title: 'Basics', prompts: ['name', 'description'] },
+        { title: 'Licence', prompts: ['license'] },
+      ],
+    });
+    expect(m.sections).toHaveLength(2);
+    expect(m.sections?.[0]?.title).toBe('Basics');
+  });
+
+  it('accepts a manifest without sections (flat list still works)', () => {
+    const m = parseManifestObject({ ...baseManifest, prompts: promptsFixture });
+    expect(m.sections).toBeUndefined();
+  });
+
+  it('rejects a section that references an unknown prompt', () => {
+    expect(() =>
+      parseManifestObject({
+        ...baseManifest,
+        prompts: promptsFixture,
+        sections: [
+          { title: 'Basics', prompts: ['name', 'ghost'] },
+          { title: 'Licence', prompts: ['description', 'license'] },
+        ],
+      }),
+    ).toThrow(ManifestError);
+  });
+
+  it('rejects an orphan prompt when sections are declared', () => {
+    expect(() =>
+      parseManifestObject({
+        ...baseManifest,
+        prompts: promptsFixture,
+        sections: [{ title: 'Basics', prompts: ['name', 'description'] }],
+      }),
+    ).toThrow(/license.*not assigned/);
+  });
+
+  it('rejects a prompt mentioned in two sections', () => {
+    expect(() =>
+      parseManifestObject({
+        ...baseManifest,
+        prompts: promptsFixture,
+        sections: [
+          { title: 'A', prompts: ['name', 'description'] },
+          { title: 'B', prompts: ['description', 'license'] },
+        ],
+      }),
+    ).toThrow(/multiple sections/);
+  });
+
+  it('rejects a section with no prompts (zod min(1))', () => {
+    expect(() =>
+      parseManifestObject({
+        ...baseManifest,
+        prompts: promptsFixture,
+        sections: [
+          { title: 'Empty', prompts: [] },
+          { title: 'Rest', prompts: ['name', 'description', 'license'] },
+        ],
+      }),
+    ).toThrow(ManifestError);
+  });
+});

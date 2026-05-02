@@ -7,9 +7,11 @@ import type {
   PathPrompt,
   Prompt,
   PromptDef,
+  Section,
   StringPrompt,
 } from '../manifest/types.js';
 import { evalWhen } from './expr.js';
+import { planSections } from './sections.js';
 import type { Answers, Prompter } from './types.js';
 
 export class PromptError extends Error {
@@ -116,16 +118,75 @@ async function askPrompt(prompter: Prompter, p: Prompt): Promise<unknown> {
  * already collected. Skipped prompts contribute nothing to the answers
  * object — downstream `when:` expressions and Nunjucks templates that
  * reference them will see `undefined`.
+ *
+ * If `sections` is provided, prompts are grouped and sectioning UI hooks
+ * on the prompter are invoked at the right moments. Without sections,
+ * the engine runs as a flat list (no headers, no outline) — backwards
+ * compatible with manifests that don't declare `sections:`.
+ *
+ * Header suppression: a section whose every prompt is `when:`-skipped at
+ * section entry (using answers gathered from earlier sections) is fully
+ * skipped — no header, no progress events. Same-section dependencies
+ * still work for runtime skipping; the header heuristic only catches the
+ * "entire section gated by a previous answer" case.
  */
 export async function runPrompts(
   prompts: Prompt[],
   prompter: Prompter,
   initial: Answers = {},
+  sections?: Section[],
 ): Promise<Answers> {
   const answers: Answers = { ...initial };
-  for (const p of prompts) {
-    if (p.def.when && !evalWhen(p.def.when, answers)) continue;
-    answers[p.name] = await askPrompt(prompter, p);
+  const plans = planSections(prompts, sections);
+  const sectioned = plans.length > 1 || (plans[0]?.title ?? null) !== null;
+
+  if (sectioned && prompter.outline) {
+    prompter.outline(
+      plans.map((plan) => ({
+        title: plan.title ?? '',
+        promptCount: plan.prompts.length,
+      })),
+    );
   }
+
+  for (let i = 0; i < plans.length; i++) {
+    const plan = plans[i];
+    if (!plan) continue;
+    const promptTotal = plan.prompts.length;
+
+    const willFire = plan.prompts.map((p) => !p.def.when || evalWhen(p.def.when, answers));
+    const anyVisible = willFire.some(Boolean);
+    if (!anyVisible) continue;
+
+    const showHeader = sectioned && plan.title !== null;
+    const sectionInfo = showHeader
+      ? {
+          index: i + 1,
+          total: plans.length,
+          title: plan.title as string,
+          promptCount: promptTotal,
+        }
+      : null;
+
+    if (sectionInfo) prompter.sectionStart?.(sectionInfo);
+
+    for (let j = 0; j < plan.prompts.length; j++) {
+      const p = plan.prompts[j];
+      if (!p) continue;
+      if (p.def.when && !evalWhen(p.def.when, answers)) continue;
+      if (sectioned) {
+        prompter.progress?.({
+          sectionIndex: i + 1,
+          sectionTotal: plans.length,
+          promptIndex: j + 1,
+          promptTotal,
+        });
+      }
+      answers[p.name] = await askPrompt(prompter, p);
+    }
+
+    if (sectionInfo) prompter.sectionEnd?.(sectionInfo);
+  }
+
   return answers;
 }
