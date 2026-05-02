@@ -1,0 +1,82 @@
+export type PromptCommon = {
+  description?: string;
+  required?: boolean;
+  when?: string;
+};
+
+export type StringPrompt = PromptCommon & {
+  type: 'string';
+  default?: string;
+  pattern?: string;
+};
+
+export type IntegerPrompt = PromptCommon & {
+  type: 'integer' | 'number';
+  default?: number;
+  min?: number;
+  max?: number;
+};
+
+export type BooleanPrompt = PromptCommon & {
+  type: 'boolean';
+  default?: boolean;
+};
+
+export type EnumPrompt = PromptCommon & {
+  type: 'enum';
+  choices: string[];
+  default?: string;
+};
+
+export type MultiPrompt = PromptCommon & {
+  type: 'multi';
+  choices: string[];
+  default?: string[];
+};
+
+export type PasswordPrompt = PromptCommon & {
+  type: 'password';
+};
+
+export type PathPrompt = PromptCommon & {
+  type: 'path';
+  default?: string;
+  must_exist?: boolean;
+};
+
+export type PromptDef =
+  | StringPrompt
+  | IntegerPrompt
+  | BooleanPrompt
+  | EnumPrompt
+  | MultiPrompt
+  | PasswordPrompt
+  | PathPrompt;
+
+export type Prompt = { name: string; def: PromptDef };
+
+export type RenameHook = {
+  rename: { from: string; to: string; when?: string };
+};
+
+export type DeleteHook = {
+  delete: ({ path: string } | { glob: string }) & { when?: string };
+};
+
+export type PostRenderHook = RenameHook | DeleteHook;
+
+export type Hooks = {
+  post_render?: PostRenderHook[];
+};
+
+export type IncludeRule = { path: string; when: string } | { glob: string; when: string };
+
+export type Manifest = {
+  type: 'component' | 'recipe';
+  name: string;
+  version: string;
+  kind?: string;
+  prompts?: Prompt[];
+  hooks?: Hooks;
+  include?: IncludeRule[];
+};
