@@ -1,4 +1,4 @@
-import { mkdir, readdir, rename, rm, stat } from 'node:fs/promises';
+import { mkdir, readdir, rename, rm, rmdir, stat } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import ignore from 'ignore';
 import type { PostRenderHook } from '../manifest/types.js';
@@ -146,7 +146,7 @@ async function pruneEmptyAncestors(outputPath: string, relativePath: string): Pr
     try {
       const entries = await readdir(abs);
       if (entries.length > 0) return;
-      await rm(abs, { recursive: false });
+      await rmdir(abs);
     } catch {
       return;
     }

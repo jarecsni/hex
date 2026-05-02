@@ -112,6 +112,8 @@ describe('runPostRenderHooks — delete', () => {
     );
     expect(result.deleted.sort()).toEqual(['src/examples/a.ts', 'src/examples/b.ts']);
     expect(existsSync(join(work, 'src/index.ts'))).toBe(true);
+    expect(existsSync(join(work, 'src/examples'))).toBe(false);
+    expect(existsSync(join(work, 'src'))).toBe(true);
   });
 
   it('honours when: on a delete hook', async () => {
