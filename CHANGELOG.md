@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0] — 2026-05-02
+
+### Added
+
+- `hex new <template> <output> [--force]` — render a templated component into a target directory. Loads a manifest, runs prompts, renders files through Nunjucks, and applies declarative post-render hooks.
+- Manifest schema (`.hex/manifest.yaml`) with zod-validated structure: typed prompts (`string` with optional `pattern`, `integer`/`number` with `min`/`max`, `boolean`, `enum`, `multi`, `password`, `path` with `must_exist`), shorthand desugaring (YAML array → enum, bare boolean/number/string → typed default), `include:` rules for conditional file inclusion, and `hooks.post_render` (`rename`, `delete` by `path` or `glob`).
+- `FileSource` — load a component bundle from a local path. `manifest.yaml` and `manifest.yml` both honoured.
+- Prompts engine — pluggable `Prompter` interface (production wiring on `@clack/prompts` v1.3) with per-type widgets (text/confirm/select/multiselect/password) and Nunjucks-native `when:` evaluation (`not`, `==`, `in`, …).
+- Render engine — Nunjucks for both file contents and rendered file paths (`{{ … }}` in filenames), `.hexignore` support, manifest-level `include:` evaluation, binary-file pass-through, path-traversal guard.
+- Post-render hooks — `rename` (with optional `when:` and `--force`-aware target overwrite) and `delete` (by `path` or `glob`, with `when:`); empty ancestor directories left behind by `delete` are pruned.
+- Reference template `templates/node-ts-cli/` — minimal Node + TypeScript CLI (commander, tsup, biome, vitest) demonstrating prompts, conditional content (`include_examples`), licence branching, and rename/delete hooks.
+
+### Fixed
+
+- Splash module now walks upward to locate `package.json`, so `npm run dev` (tsx-from-source) and the bundled `dist/` both resolve VERSION correctly.
+
 ## [0.2.0] — 2026-04-26
 
 ### Added
