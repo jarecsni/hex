@@ -8,7 +8,6 @@ program
   .description('{{ description }}')
   .version('0.1.0', '-v, --version', 'print version and exit');
 {% if include_examples %}
-
 program
   .command('hello [name]')
   .description('say hello')
