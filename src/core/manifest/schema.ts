@@ -104,7 +104,7 @@ export const sectionSchema = z.object({
 
 const SEMVER_RE = /^\d+\.\d+\.\d+(?:[-+].*)?$/;
 
-const TASK_ID_RE = /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/;
+export const TASK_ID_RE = /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/;
 
 export const setupTaskSchema = z.object({
   id: z
