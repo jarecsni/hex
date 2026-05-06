@@ -33,7 +33,10 @@ describe('discoverTemplates', () => {
     await makeTemplate(r2, 'beta', 'type: recipe\nname: beta\nversion: 0.2.0\n');
 
     const result = await discoverTemplates({
-      sources: [{ path: r1 }, { path: r2 }],
+      sources: [
+        { kind: 'path' as const, path: r1 },
+        { kind: 'path' as const, path: r2 },
+      ],
     });
 
     expect(result.warnings).toEqual([]);
@@ -48,7 +51,7 @@ describe('discoverTemplates', () => {
     await makeTemplate(r, 'good', 'type: component\nname: good\nversion: 1.0.0\n');
     await makeTemplate(r, 'bad', 'type: component\nname: bad\n'); // missing version
 
-    const result = await discoverTemplates({ sources: [{ path: r }] });
+    const result = await discoverTemplates({ sources: [{ kind: 'path', path: r }] });
 
     expect(result.templates.map((t) => t.name)).toEqual(['good']);
     expect(result.warnings).toHaveLength(1);
@@ -72,7 +75,10 @@ describe('discoverTemplates', () => {
     );
 
     const result = await discoverTemplates({
-      sources: [{ path: r1 }, { path: r2 }],
+      sources: [
+        { kind: 'path' as const, path: r1 },
+        { kind: 'path' as const, path: r2 },
+      ],
     });
 
     expect(result.templates).toHaveLength(1);
@@ -88,7 +94,10 @@ describe('discoverTemplates', () => {
     await makeTemplate(r, 'a', 'type: component\nname: a\nversion: 0.1.0\n');
 
     const result = await discoverTemplates({
-      sources: [{ path: join(workspace, 'missing') }, { path: r }],
+      sources: [
+        { kind: 'path', path: join(workspace, 'missing') },
+        { kind: 'path', path: r },
+      ],
     });
 
     expect(result.templates.map((t) => t.name)).toEqual(['a']);
@@ -102,7 +111,7 @@ describe('discoverTemplates', () => {
     await mkdir(join(r, 'plain-dir'));
     await makeTemplate(r, 'real', 'type: component\nname: real\nversion: 0.1.0\n');
 
-    const result = await discoverTemplates({ sources: [{ path: r }] });
+    const result = await discoverTemplates({ sources: [{ kind: 'path', path: r }] });
     expect(result.templates.map((t) => t.name)).toEqual(['real']);
     expect(result.warnings).toEqual([]);
   });

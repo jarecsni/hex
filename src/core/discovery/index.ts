@@ -38,6 +38,18 @@ export async function discoverTemplates(config: HexConfig): Promise<DiscoveryRes
   const seenNames = new Map<string, TemplateEntry>();
 
   for (const source of config.sources) {
+    if (source.kind === 'git') {
+      // M3.3 wires git resolution into discovery. Until then, list-time
+      // discovery skips git entries with a warning so a config mixing
+      // path + git roots still surfaces the local templates cleanly.
+      warnings.push(
+        `git source not yet supported in this build (skipped): ${source.url}${
+          source.ref ? `@${source.ref}` : ''
+        }`,
+      );
+      continue;
+    }
+
     const sourceRoot = source.path;
 
     let rootStat: Awaited<ReturnType<typeof stat>>;
