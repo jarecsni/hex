@@ -1,8 +1,25 @@
+import { execFile } from 'node:child_process';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { promisify } from 'node:util';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { discoverTemplates } from '../../../src/core/discovery/index.js';
+
+const execFileAsync = promisify(execFile);
+
+async function runGit(cwd: string, ...args: string[]): Promise<void> {
+  await execFileAsync('git', args, {
+    cwd,
+    env: {
+      ...process.env,
+      GIT_AUTHOR_NAME: 'Test',
+      GIT_AUTHOR_EMAIL: 'test@example.com',
+      GIT_COMMITTER_NAME: 'Test',
+      GIT_COMMITTER_EMAIL: 'test@example.com',
+    },
+  });
+}
 
 let workspace: string;
 
@@ -119,5 +136,51 @@ describe('discoverTemplates', () => {
   it('returns an empty result for an empty config', async () => {
     const result = await discoverTemplates({ sources: [] });
     expect(result).toEqual({ templates: [], warnings: [] });
+  });
+
+  it('discovers templates from a git source root via lazy fetch', async () => {
+    // Stand up a local upstream repo with a single template inside it.
+    const upstream = join(workspace, 'upstream');
+    await mkdir(upstream);
+    await runGit(upstream, 'init', '-q', '-b', 'main');
+    await makeTemplate(upstream, 'gamma', 'type: component\nname: gamma\nversion: 0.5.0\n');
+    await runGit(upstream, 'add', '.');
+    await runGit(upstream, 'commit', '-q', '-m', 'initial');
+
+    const cacheDir = join(workspace, 'cache');
+
+    const result = await discoverTemplates(
+      { sources: [{ kind: 'git', url: `file://${upstream}`, ref: 'main' }] },
+      { cacheDir },
+    );
+
+    expect(result.warnings).toEqual([]);
+    expect(result.templates).toHaveLength(1);
+    expect(result.templates[0]?.name).toBe('gamma');
+    expect(result.templates[0]?.sourceRoot).toBe(`file://${upstream}@main`);
+    // The walk root must live under the cache dir, not the upstream itself.
+    expect(result.templates[0]?.rootPath).toContain(cacheDir);
+    expect(result.templates[0]?.rootPath).not.toContain(upstream);
+  });
+
+  it('warns and continues when a git source URL is unreachable', async () => {
+    const r = join(workspace, 'r');
+    await mkdir(r);
+    await makeTemplate(r, 'present', 'type: component\nname: present\nversion: 0.1.0\n');
+
+    const cacheDir = join(workspace, 'cache');
+
+    const result = await discoverTemplates(
+      {
+        sources: [
+          { kind: 'git', url: `file://${join(workspace, 'no-such-repo')}` },
+          { kind: 'path', path: r },
+        ],
+      },
+      { cacheDir },
+    );
+
+    expect(result.templates.map((t) => t.name)).toEqual(['present']);
+    expect(result.warnings.some((w) => w.startsWith('git source '))).toBe(true);
   });
 });
