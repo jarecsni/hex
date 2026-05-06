@@ -5,6 +5,7 @@ import { VERSION, splash } from './brand/splash.js';
 import { registerDoctor } from './commands/doctor.js';
 import { registerList } from './commands/list.js';
 import { registerNew } from './commands/new.js';
+import { registerSources } from './commands/sources.js';
 import { maybeUpdate } from './update.js';
 
 process.on('exit', () => {
@@ -24,6 +25,7 @@ async function main() {
   registerDoctor(program);
   registerList(program);
   registerNew(program);
+  registerSources(program);
 
   await program.parseAsync(process.argv);
 }

@@ -116,7 +116,7 @@ async function refetch(url: string, ref: string | undefined, repoDir: string): P
   return revParseHead(repoDir);
 }
 
-type Meta = {
+export type GitMeta = {
   url: string;
   ref: string;
   sha: string;
@@ -126,6 +126,7 @@ type Meta = {
   /** Last upstream SHA observed by an `ls-remote` check. */
   lastKnownUpstreamSha?: string;
 };
+type Meta = GitMeta;
 
 /** Default 6h TTL between `git ls-remote` calls per (url, ref). */
 export const DEFAULT_UPSTREAM_CHECK_TTL_MS = 6 * 60 * 60 * 1000;
@@ -158,6 +159,20 @@ async function readMeta(metaPath: string): Promise<Meta | null> {
   } catch {
     return null;
   }
+}
+
+/**
+ * Read the meta record for a cached git source, or `null` if absent.
+ * Useful for status commands that want to display fetch time / sha
+ * without triggering a network call.
+ */
+export async function readGitMeta(
+  entry: { url: string; ref?: string },
+  cacheDir?: string,
+): Promise<GitMeta | null> {
+  const baseDir = cacheDir ?? getDefaultCacheDir();
+  const metaPath = join(cacheDirFor(entry.url, entry.ref, baseDir), META_FILENAME);
+  return readMeta(metaPath);
 }
 
 async function writeMeta(metaPath: string, meta: Meta): Promise<void> {
