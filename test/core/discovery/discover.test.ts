@@ -163,6 +163,38 @@ describe('discoverTemplates', () => {
     expect(result.templates[0]?.rootPath).not.toContain(upstream);
   });
 
+  it('emits a drift warning when the cached git source is behind upstream', async () => {
+    const upstream = join(workspace, 'upstream');
+    await mkdir(upstream);
+    await runGit(upstream, 'init', '-q', '-b', 'main');
+    await makeTemplate(upstream, 'gamma', 'type: component\nname: gamma\nversion: 0.1.0\n');
+    await runGit(upstream, 'add', '.');
+    await runGit(upstream, 'commit', '-q', '-m', 'initial');
+
+    const cacheDir = join(workspace, 'cache');
+
+    // Prime the cache with the initial commit.
+    const first = await discoverTemplates(
+      { sources: [{ kind: 'git', url: `file://${upstream}`, ref: 'main' }] },
+      { cacheDir, upstreamCheckTtlMs: 0 },
+    );
+    expect(first.warnings).toEqual([]);
+
+    // Advance upstream — cache stays at the original SHA.
+    await writeFile(join(upstream, 'NOTES.md'), 'extra\n', 'utf8');
+    await runGit(upstream, 'add', '.');
+    await runGit(upstream, 'commit', '-q', '-m', 'second');
+
+    const second = await discoverTemplates(
+      { sources: [{ kind: 'git', url: `file://${upstream}`, ref: 'main' }] },
+      { cacheDir, upstreamCheckTtlMs: 0 },
+    );
+
+    // Templates still come from the cached copy — not refreshed.
+    expect(second.templates.map((t) => t.name)).toEqual(['gamma']);
+    expect(second.warnings.some((w) => w.includes('upstream has new commits'))).toBe(true);
+  });
+
   it('warns and continues when a git source URL is unreachable', async () => {
     const r = join(workspace, 'r');
     await mkdir(r);

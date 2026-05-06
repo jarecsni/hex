@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import type { HexConfig, SourceRootEntry } from '../config/types.js';
 import { parseManifestFile } from '../manifest/parse.js';
 import { findManifestFile } from '../sources/file-source.js';
-import { resolveGitSource } from '../sources/git-source.js';
+import { checkUpstreamDrift, resolveGitSource } from '../sources/git-source.js';
 
 export type TemplateEntry = {
   name: string;
@@ -25,8 +25,12 @@ export type DiscoveryResult = {
 };
 
 export type DiscoveryOpts = {
-  /** Forwarded to `resolveGitSource` for git source roots. */
+  /** Forwarded to `resolveGitSource` / `checkUpstreamDrift`. */
   cacheDir?: string;
+  /** Override the upstream-drift check TTL (ms). Default 6h. */
+  upstreamCheckTtlMs?: number;
+  /** Override `now()` for upstream-drift checks (test injection). */
+  now?: Date;
 };
 
 /**
@@ -59,9 +63,28 @@ export async function discoverTemplates(
     const resolved = await resolveSourceRoot(source, opts, warnings);
     if (!resolved) continue;
     await walkSourceRoot(resolved, templates, seenNames, warnings);
+    if (source.kind === 'git') await emitDriftWarning(source, opts, warnings);
   }
 
   return { templates, warnings };
+}
+
+async function emitDriftWarning(
+  source: { url: string; ref?: string },
+  opts: DiscoveryOpts,
+  warnings: string[],
+): Promise<void> {
+  const display = source.ref ? `${source.url}@${source.ref}` : source.url;
+  const drift = await checkUpstreamDrift(source, {
+    cacheDir: opts.cacheDir,
+    ttlMs: opts.upstreamCheckTtlMs,
+    now: opts.now,
+  });
+  if (!drift.drift || !drift.upstreamSha) return;
+  warnings.push(
+    `git source ${display}: upstream has new commits — run 'hex sources refresh' to update ` +
+      `(cached: ${drift.cachedSha.slice(0, 7)}, upstream: ${drift.upstreamSha.slice(0, 7)})`,
+  );
 }
 
 type ResolvedRoot = {

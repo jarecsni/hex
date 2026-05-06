@@ -121,6 +121,34 @@ type Meta = {
   ref: string;
   sha: string;
   fetchedAt: string;
+  /** When we last asked upstream for its SHA via `git ls-remote`. */
+  lastCheckedAt?: string;
+  /** Last upstream SHA observed by an `ls-remote` check. */
+  lastKnownUpstreamSha?: string;
+};
+
+/** Default 6h TTL between `git ls-remote` calls per (url, ref). */
+export const DEFAULT_UPSTREAM_CHECK_TTL_MS = 6 * 60 * 60 * 1000;
+
+export type UpstreamCheckResult = {
+  /** SHA recorded the last time we cloned/refreshed. Empty when uncached. */
+  cachedSha: string;
+  /** Last SHA observed upstream — null if no check has ever succeeded. */
+  upstreamSha: string | null;
+  /** True iff `upstreamSha` is known and differs from `cachedSha`. */
+  drift: boolean;
+  /** True if this call actually performed a network `ls-remote`. */
+  justChecked: boolean;
+  /** Populated when `ls-remote` failed in this call; never thrown. */
+  error?: string;
+};
+
+export type UpstreamCheckOpts = {
+  cacheDir?: string;
+  /** Minimum interval between consecutive `ls-remote` calls. Default 6h. */
+  ttlMs?: number;
+  /** Override `now()` for tests. */
+  now?: Date;
 };
 
 async function readMeta(metaPath: string): Promise<Meta | null> {
@@ -193,5 +221,110 @@ export async function resolveGitSource(
     ref: meta.ref,
     sha: meta.sha,
     fetchedAt: meta.fetchedAt,
+  };
+}
+
+/**
+ * Ask the remote what SHA `<ref>` (or `HEAD`) currently points at, without
+ * fetching any objects. Lightweight enough for periodic drift checks.
+ */
+async function lsRemoteSha(url: string, ref: string | undefined): Promise<string> {
+  const target = ref ?? 'HEAD';
+  let stdout: string;
+  try {
+    const result = await execFileAsync('git', ['ls-remote', url, target], { env: process.env });
+    stdout = result.stdout;
+  } catch (err) {
+    const e = err as { stderr?: string; message?: string };
+    const detail = e.stderr?.trim() || e.message || String(err);
+    throw new GitSourceError(`git ls-remote ${url} ${target} failed: ${detail}`);
+  }
+
+  const lines = stdout.split('\n').filter((l) => l.trim().length > 0);
+  if (lines.length === 0) {
+    throw new GitSourceError(`git ls-remote ${url} ${target} returned no refs`);
+  }
+  // Each line is `<sha>\t<ref-name>`. Take the first match — for `HEAD` and
+  // unambiguous refs there's only one line; for ambiguous refs (a branch and
+  // tag with the same name) we accept the first the server returned.
+  const first = lines[0] as string;
+  const sha = first.split(/\s+/)[0] ?? '';
+  if (!/^[0-9a-f]{40}$/.test(sha)) {
+    throw new GitSourceError(`git ls-remote ${url} ${target} produced unexpected output: ${first}`);
+  }
+  return sha;
+}
+
+/**
+ * Compare the cached SHA against upstream's current SHA via `git ls-remote`,
+ * gated by a TTL so consecutive `hex list` calls do not hammer the network.
+ *
+ * Failures (offline, auth error, host down) are caught and reported in the
+ * `error` field — never thrown. Drift detection then degrades gracefully:
+ * we surface whatever was last known, so a transient failure does not erase
+ * a previously-detected drift.
+ *
+ * Side effect: on a successful `ls-remote`, the meta file is updated with
+ * `lastCheckedAt` and `lastKnownUpstreamSha`. A failed check does NOT bump
+ * `lastCheckedAt`, so the next call will retry instead of being silenced
+ * for the rest of the TTL window.
+ */
+export async function checkUpstreamDrift(
+  entry: { url: string; ref?: string },
+  opts: UpstreamCheckOpts = {},
+): Promise<UpstreamCheckResult> {
+  const baseDir = opts.cacheDir ?? getDefaultCacheDir();
+  const cacheRoot = cacheDirFor(entry.url, entry.ref, baseDir);
+  const metaPath = join(cacheRoot, META_FILENAME);
+  const ttlMs = opts.ttlMs ?? DEFAULT_UPSTREAM_CHECK_TTL_MS;
+  const now = opts.now ?? new Date();
+
+  const meta = await readMeta(metaPath);
+  if (!meta) {
+    // Nothing cached → nothing to compare against.
+    return { cachedSha: '', upstreamSha: null, drift: false, justChecked: false };
+  }
+
+  const cachedSha = meta.sha;
+  const lastChecked = meta.lastCheckedAt ? new Date(meta.lastCheckedAt) : null;
+  const elapsed = lastChecked ? now.getTime() - lastChecked.getTime() : Number.POSITIVE_INFINITY;
+  const withinTtl = elapsed < ttlMs;
+
+  if (withinTtl) {
+    const upstreamSha = meta.lastKnownUpstreamSha ?? null;
+    return {
+      cachedSha,
+      upstreamSha,
+      drift: upstreamSha !== null && upstreamSha !== cachedSha,
+      justChecked: false,
+    };
+  }
+
+  let upstreamSha: string;
+  try {
+    upstreamSha = await lsRemoteSha(entry.url, entry.ref);
+  } catch (err) {
+    const lastKnown = meta.lastKnownUpstreamSha ?? null;
+    return {
+      cachedSha,
+      upstreamSha: lastKnown,
+      drift: lastKnown !== null && lastKnown !== cachedSha,
+      justChecked: false,
+      error: err instanceof Error ? err.message : String(err),
+    };
+  }
+
+  const updated: Meta = {
+    ...meta,
+    lastCheckedAt: now.toISOString(),
+    lastKnownUpstreamSha: upstreamSha,
+  };
+  await writeMeta(metaPath, updated);
+
+  return {
+    cachedSha,
+    upstreamSha,
+    drift: upstreamSha !== cachedSha,
+    justChecked: true,
   };
 }

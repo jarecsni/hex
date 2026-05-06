@@ -8,6 +8,7 @@ import {
   type GitResolveResult,
   GitSourceError,
   cacheDirFor,
+  checkUpstreamDrift,
   resolveGitSource,
 } from '../../../src/core/sources/git-source.js';
 
@@ -164,6 +165,119 @@ describe('resolveGitSource', () => {
     const second = await resolveGitSource({ url: fileUrl(upstream) }, { cacheDir });
     expect(second.localPath).toBe(first.localPath);
     expect(second.sha).toBe(first.sha);
+  });
+});
+
+describe('checkUpstreamDrift', () => {
+  it('returns no-drift when no cache exists', async () => {
+    const cacheDir = join(work, 'cache');
+    const drift = await checkUpstreamDrift(
+      { url: 'file:///does/not/matter' },
+      { cacheDir, now: new Date() },
+    );
+    expect(drift).toEqual({
+      cachedSha: '',
+      upstreamSha: null,
+      drift: false,
+      justChecked: false,
+    });
+  });
+
+  it('detects drift when upstream advances past the cached SHA', async () => {
+    const upstream = await makeUpstreamRepo();
+    const cacheDir = join(work, 'cache');
+
+    const fetched = await resolveGitSource({ url: fileUrl(upstream), ref: 'main' }, { cacheDir });
+
+    // Advance upstream by one commit.
+    await writeFile(join(upstream, 'after.txt'), 'after\n', 'utf8');
+    await git(upstream, 'add', '.');
+    await git(upstream, 'commit', '-q', '-m', 'after');
+
+    const drift = await checkUpstreamDrift(
+      { url: fileUrl(upstream), ref: 'main' },
+      { cacheDir, now: new Date() },
+    );
+
+    expect(drift.justChecked).toBe(true);
+    expect(drift.cachedSha).toBe(fetched.sha);
+    expect(drift.upstreamSha).not.toBe(null);
+    expect(drift.drift).toBe(true);
+  });
+
+  it('reuses the previous result inside the TTL window', async () => {
+    const upstream = await makeUpstreamRepo();
+    const cacheDir = join(work, 'cache');
+
+    await resolveGitSource({ url: fileUrl(upstream), ref: 'main' }, { cacheDir });
+
+    const t0 = new Date('2026-05-06T10:00:00.000Z');
+    const first = await checkUpstreamDrift(
+      { url: fileUrl(upstream), ref: 'main' },
+      { cacheDir, now: t0 },
+    );
+    expect(first.justChecked).toBe(true);
+
+    // Drop the upstream — a real network call would now fail. Within the TTL
+    // we must reuse the cached result instead of touching the network.
+    await rm(upstream, { recursive: true, force: true });
+
+    const t1 = new Date('2026-05-06T15:59:00.000Z'); // < 6h later
+    const second = await checkUpstreamDrift(
+      { url: fileUrl(upstream), ref: 'main' },
+      { cacheDir, now: t1 },
+    );
+    expect(second.justChecked).toBe(false);
+    expect(second.upstreamSha).toBe(first.upstreamSha);
+  });
+
+  it('re-checks once the TTL window has elapsed', async () => {
+    const upstream = await makeUpstreamRepo();
+    const cacheDir = join(work, 'cache');
+
+    await resolveGitSource({ url: fileUrl(upstream), ref: 'main' }, { cacheDir });
+
+    const t0 = new Date('2026-05-06T10:00:00.000Z');
+    const first = await checkUpstreamDrift(
+      { url: fileUrl(upstream), ref: 'main' },
+      { cacheDir, now: t0 },
+    );
+    expect(first.justChecked).toBe(true);
+
+    const t1 = new Date('2026-05-06T16:01:00.000Z'); // > 6h later
+    const second = await checkUpstreamDrift(
+      { url: fileUrl(upstream), ref: 'main' },
+      { cacheDir, now: t1 },
+    );
+    expect(second.justChecked).toBe(true);
+  });
+
+  it('reports the previous drift state when ls-remote fails', async () => {
+    const upstream = await makeUpstreamRepo();
+    const cacheDir = join(work, 'cache');
+
+    await resolveGitSource({ url: fileUrl(upstream), ref: 'main' }, { cacheDir });
+
+    // First check while upstream is alive — TTL=0 forces the network call.
+    const t0 = new Date('2026-05-06T10:00:00.000Z');
+    await checkUpstreamDrift(
+      { url: fileUrl(upstream), ref: 'main' },
+      { cacheDir, now: t0, ttlMs: 0 },
+    );
+
+    // Kill upstream, re-check past the TTL.
+    await rm(upstream, { recursive: true, force: true });
+
+    const t1 = new Date('2026-05-06T20:00:00.000Z');
+    const result = await checkUpstreamDrift(
+      { url: fileUrl(upstream), ref: 'main' },
+      { cacheDir, now: t1, ttlMs: 0 },
+    );
+    expect(result.justChecked).toBe(false);
+    expect(result.error).toMatch(/ls-remote/);
+    // Last-known upstream sha equalled cached sha (single commit), so drift is false.
+    expect(result.upstreamSha).toBe(result.cachedSha);
+    expect(result.drift).toBe(false);
   });
 });
 
