@@ -10,7 +10,7 @@ A scaffolding tool that assembles applications from pluggable **components** und
 
 | Phase | Theme | Milestones | Status |
 |-------|-------|------------|--------|
-| 1 | Configurable scaffolder | M1 (render pipeline), M2 (roots + discovery), M3 (`GitSource`) | M1 ✅ 0.3.0, M2 ✅ 0.4.0 |
+| 1 | Configurable scaffolder | M1 (render pipeline), M2 (roots + discovery), M3 (`GitSource`) | M1 ✅ 0.3.0, M2 ✅ 0.4.0, M3 ✅ 0.5.0 |
 | 2 | Zero to dev | M4 (deploy + CI/CD) | — |
 | 3 | Composition | M5 (recipes), M6 (contracts + swap) | — |
 | 4 | Trust + extensibility | M7 (JS hook sandbox), M8 (stub integration) | — |
