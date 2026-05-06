@@ -152,6 +152,28 @@ describe('resolveGitSource', () => {
     );
   });
 
+  it('resolves a 40-char commit SHA as a ref', async () => {
+    const upstream = await makeUpstreamRepo();
+    const cacheDir = join(work, 'cache');
+
+    // Capture the initial commit SHA, then advance upstream so HEAD diverges.
+    const initialSha = await git(upstream, 'rev-parse', 'HEAD');
+    await writeFile(join(upstream, 'after.txt'), 'after\n', 'utf8');
+    await git(upstream, 'add', '.');
+    await git(upstream, 'commit', '-q', '-m', 'after');
+
+    const result = await resolveGitSource(
+      { url: fileUrl(upstream), ref: initialSha },
+      { cacheDir },
+    );
+
+    expect(result.sha).toBe(initialSha);
+    expect(result.ref).toBe(initialSha);
+    // The "after.txt" file was added in a later commit, so it must NOT be
+    // present in the working tree if we really checked out the initial sha.
+    await expect(readFile(join(result.localPath, 'after.txt'), 'utf8')).rejects.toThrow();
+  });
+
   it('recovers from a partial cache (meta missing) by re-cloning', async () => {
     const upstream = await makeUpstreamRepo();
     const cacheDir = join(work, 'cache');

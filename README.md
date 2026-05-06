@@ -33,6 +33,12 @@ Drift detection runs at most once per 6h per (url, ref) using
 warning and tells you to `hex sources refresh`. Network failures are
 silent — Hex never blocks offline use.
 
+> **Note on SHA refs.** `ref:` accepts branches, tags, and commit SHAs.
+> SHA fetches work uniformly against the local protocol, GitHub, and
+> GitLab. Self-hosted servers may need `uploadpack.allowAnySHA1InWant=true`
+> for arbitrary commits not reachable from a default branch — branches
+> and tags don't need this.
+
 ## Try it
 
 ```sh
