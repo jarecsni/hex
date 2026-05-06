@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- M3 — `GitSource`. Source roots in `~/.hex/config.yaml` now accept `{ git: <url>, ref?: <branch|tag|sha> }` alongside `{ path: <dir> }`. Repos are cloned lazily into `~/.hex/cache/git/<urlHash>/<refSlug>-<refHash>/repo/` (override the cache root via `HEX_CACHE_DIR`) on first use; subsequent commands hit the cache without touching the network. Auth flows through the system `git` (SSH agent, credential helpers, `~/.gitconfig`). Cold-cache fetches use `git init && fetch --depth 1 && checkout FETCH_HEAD`, which works uniformly for branches, tags, and reachable SHAs.
+- Upstream drift detection. `git ls-remote` is invoked at most once per 6h per (url, ref) to compare upstream's SHA against the cached SHA. When they diverge, `hex list` emits a warning telling you to run `hex sources refresh`. Failures (offline, auth, host down) are caught silently — drift detection degrades gracefully and never blocks offline use.
+- `hex sources` — list configured sources with cache + drift status. Path sources show `exists`/`missing`; git sources show cached SHA, fetch timestamp, and `fresh`/`drift` indicator. `--json` flag for scriptable output. Reads cache state without triggering network calls.
+- `hex sources refresh` — force-refresh every git source through the resolver, ignoring TTL and cache hits. Reports per-source success/failure and exits non-zero if any source failed.
+
 ## [0.4.0] — 2026-05-02
 
 ### Added

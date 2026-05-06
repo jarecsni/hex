@@ -86,7 +86,12 @@ export async function loadConfig(opts?: LoadConfigOpts): Promise<HexConfig> {
   }
 
   return {
-    sources: result.data.sources.map((s) => ({ path: normalisePath(s.path, configDir) })),
+    sources: result.data.sources.map((s) => {
+      if ('path' in s) {
+        return { kind: 'path' as const, path: normalisePath(s.path, configDir) };
+      }
+      return { kind: 'git' as const, url: s.git, ref: s.ref };
+    }),
   };
 }
 

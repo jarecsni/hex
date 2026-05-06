@@ -33,21 +33,30 @@ describe('loadConfig', () => {
       'utf8',
     );
     const cfg = await loadConfig({ configDir: dir });
-    expect(cfg.sources).toEqual([{ path: '/opt/templates' }, { path: '/tmp/templates' }]);
+    expect(cfg.sources).toEqual([
+      { kind: 'path', path: '/opt/templates' },
+      { kind: 'path', path: '/tmp/templates' },
+    ]);
   });
 
   it('resolves relative source paths against the config directory', async () => {
     await mkdir(join(dir, 'templates'), { recursive: true });
     await writeFile(join(dir, 'config.yaml'), 'sources:\n  - path: templates\n', 'utf8');
     const cfg = await loadConfig({ configDir: dir });
-    expect(cfg.sources[0]?.path).toBe(join(dir, 'templates'));
+    const first = cfg.sources[0];
+    expect(first?.kind).toBe('path');
+    if (first?.kind === 'path') expect(first.path).toBe(join(dir, 'templates'));
   });
 
   it('expands ~ in source paths to the home directory', async () => {
     await writeFile(join(dir, 'config.yaml'), 'sources:\n  - path: ~/dev/templates\n', 'utf8');
     const cfg = await loadConfig({ configDir: dir });
-    expect(cfg.sources[0]?.path).toMatch(/dev\/templates$/);
-    expect(cfg.sources[0]?.path).not.toContain('~');
+    const first = cfg.sources[0];
+    expect(first?.kind).toBe('path');
+    if (first?.kind === 'path') {
+      expect(first.path).toMatch(/dev\/templates$/);
+      expect(first.path).not.toContain('~');
+    }
   });
 
   it('honours HEX_CONFIG_DIR over default ~/.hex', async () => {
@@ -56,11 +65,58 @@ describe('loadConfig', () => {
     process.env.HEX_CONFIG_DIR = dir;
     try {
       const cfg = await loadConfig();
-      expect(cfg.sources).toEqual([{ path: '/x' }]);
+      expect(cfg.sources).toEqual([{ kind: 'path', path: '/x' }]);
     } finally {
       if (before === undefined) Reflect.deleteProperty(process.env, 'HEX_CONFIG_DIR');
       else process.env.HEX_CONFIG_DIR = before;
     }
+  });
+
+  it('parses a git source root with a ref', async () => {
+    await writeFile(
+      join(dir, 'config.yaml'),
+      'sources:\n  - git: https://github.com/acme/templates\n    ref: v1.2.0\n',
+      'utf8',
+    );
+    const cfg = await loadConfig({ configDir: dir });
+    expect(cfg.sources).toEqual([
+      { kind: 'git', url: 'https://github.com/acme/templates', ref: 'v1.2.0' },
+    ]);
+  });
+
+  it('parses a git source root without a ref (defaults to upstream HEAD later)', async () => {
+    await writeFile(
+      join(dir, 'config.yaml'),
+      'sources:\n  - git: git@github.com:acme/templates.git\n',
+      'utf8',
+    );
+    const cfg = await loadConfig({ configDir: dir });
+    expect(cfg.sources).toEqual([
+      { kind: 'git', url: 'git@github.com:acme/templates.git', ref: undefined },
+    ]);
+  });
+
+  it('parses a config with mixed path and git sources, preserving order', async () => {
+    await writeFile(
+      join(dir, 'config.yaml'),
+      'sources:\n' +
+        '  - path: /opt/templates\n' +
+        '  - git: https://github.com/acme/templates\n' +
+        '    ref: main\n' +
+        '  - path: /tmp/templates\n',
+      'utf8',
+    );
+    const cfg = await loadConfig({ configDir: dir });
+    expect(cfg.sources).toEqual([
+      { kind: 'path', path: '/opt/templates' },
+      { kind: 'git', url: 'https://github.com/acme/templates', ref: 'main' },
+      { kind: 'path', path: '/tmp/templates' },
+    ]);
+  });
+
+  it('rejects a source entry that has neither path nor git', async () => {
+    await writeFile(join(dir, 'config.yaml'), 'sources:\n  - { ref: main }\n', 'utf8');
+    await expect(loadConfig({ configDir: dir })).rejects.toThrow(ConfigError);
   });
 
   it('throws ConfigError on malformed YAML', async () => {

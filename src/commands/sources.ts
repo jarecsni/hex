@@ -1,0 +1,215 @@
+import { stat } from 'node:fs/promises';
+import type { Command } from 'commander';
+import { brand } from '../brand/colors.js';
+import { getDefaultConfigPath, loadConfig } from '../core/config/load.js';
+import type { HexConfig, SourceRootEntry } from '../core/config/types.js';
+import {
+  GitSourceError,
+  checkUpstreamDrift,
+  readGitMeta,
+  resolveGitSource,
+} from '../core/sources/git-source.js';
+
+export type GitStatus = {
+  cached: boolean;
+  sha?: string;
+  fetchedAt?: string;
+  drift?: boolean;
+  upstreamSha?: string;
+  driftError?: string;
+};
+
+export type SourceStatus =
+  | { kind: 'path'; path: string; exists: boolean }
+  | { kind: 'git'; url: string; ref?: string; status: GitStatus };
+
+export type StatusOpts = {
+  cacheDir?: string;
+};
+
+export type RefreshResult = {
+  display: string;
+  ok: boolean;
+  sha?: string;
+  error?: string;
+};
+
+export type RefreshOpts = {
+  cacheDir?: string;
+  onStart?: (display: string) => void;
+  onComplete?: (result: RefreshResult) => void;
+};
+
+export function registerSources(program: Command): void {
+  const sources = program.command('sources').description('manage configured template source roots');
+
+  sources
+    .command('list', { isDefault: true })
+    .description('list configured sources with cache + drift status')
+    .option('--json', 'emit machine-readable JSON', false)
+    .action(async (opts: { json: boolean }) => {
+      const config = await loadConfig();
+      await runList(config, opts.json);
+    });
+
+  sources
+    .command('refresh')
+    .description('force-refresh every git source root, ignoring the cache')
+    .action(async () => {
+      const config = await loadConfig();
+      await runRefresh(config);
+    });
+}
+
+async function runList(config: HexConfig, asJson: boolean): Promise<void> {
+  if (config.sources.length === 0) {
+    if (asJson) {
+      process.stdout.write(`${JSON.stringify({ sources: [] }, null, 2)}\n`);
+      return;
+    }
+    const configPath = getDefaultConfigPath();
+    process.stdout.write(`${brand.dim('No source roots configured.')}\n`);
+    process.stdout.write(`${brand.dim(`(edit ${configPath} to add some)`)}\n`);
+    return;
+  }
+
+  const statuses = await gatherSourceStatuses(config);
+
+  if (asJson) {
+    process.stdout.write(`${JSON.stringify({ sources: statuses }, null, 2)}\n`);
+    return;
+  }
+
+  for (const s of statuses) process.stdout.write(formatStatusLine(s));
+}
+
+async function runRefresh(config: HexConfig): Promise<void> {
+  const gitSources = config.sources.filter((s) => s.kind === 'git');
+
+  if (gitSources.length === 0) {
+    process.stdout.write(`${brand.dim('No git sources to refresh.')}\n`);
+    return;
+  }
+
+  const results = await refreshAllGitSources(config, {
+    onStart: (display) => process.stdout.write(`${brand.dim('refreshing')} ${display} ... `),
+    onComplete: (r) => {
+      if (r.ok) {
+        process.stdout.write(`${brand.done('ok')} ${brand.dim(r.sha?.slice(0, 7) ?? '')}\n`);
+      } else {
+        process.stdout.write(`${brand.error('failed')}\n  ${brand.dim(r.error ?? '')}\n`);
+      }
+    },
+  });
+
+  if (results.some((r) => !r.ok)) process.exitCode = 1;
+}
+
+/**
+ * Collect cache + drift status for every configured source. Pure data
+ * function — never writes to stdout, never triggers a clone (uses
+ * `readGitMeta` for cache state, `checkUpstreamDrift` for the TTL-gated
+ * upstream comparison).
+ */
+export async function gatherSourceStatuses(
+  config: HexConfig,
+  opts: StatusOpts = {},
+): Promise<SourceStatus[]> {
+  return Promise.all(config.sources.map((s) => describeSource(s, opts)));
+}
+
+/**
+ * Force-refresh every git source. Pure data function — emits progress via
+ * optional callbacks instead of writing to stdout, so tests can assert on
+ * the returned result array without parsing terminal output.
+ */
+export async function refreshAllGitSources(
+  config: HexConfig,
+  opts: RefreshOpts = {},
+): Promise<RefreshResult[]> {
+  const gitSources = config.sources.filter((s) => s.kind === 'git');
+  const results: RefreshResult[] = [];
+
+  for (const source of gitSources) {
+    const display = source.ref ? `${source.url}@${source.ref}` : source.url;
+    opts.onStart?.(display);
+    try {
+      const result = await resolveGitSource(
+        { url: source.url, ref: source.ref },
+        { refresh: true, cacheDir: opts.cacheDir },
+      );
+      const r: RefreshResult = { display, ok: true, sha: result.sha };
+      results.push(r);
+      opts.onComplete?.(r);
+    } catch (err) {
+      const r: RefreshResult = {
+        display,
+        ok: false,
+        error: err instanceof GitSourceError ? err.message : String(err),
+      };
+      results.push(r);
+      opts.onComplete?.(r);
+    }
+  }
+
+  return results;
+}
+
+async function describeSource(source: SourceRootEntry, opts: StatusOpts): Promise<SourceStatus> {
+  if (source.kind === 'path') {
+    return { kind: 'path', path: source.path, exists: await pathExists(source.path) };
+  }
+
+  // Informational only — never triggers a clone. `hex sources refresh` is
+  // the explicit knob that populates caches; `list` just reports state.
+  const status: GitStatus = { cached: false };
+  const meta = await readGitMeta({ url: source.url, ref: source.ref }, opts.cacheDir);
+  if (meta) {
+    status.cached = true;
+    status.sha = meta.sha;
+    status.fetchedAt = meta.fetchedAt;
+    try {
+      const drift = await checkUpstreamDrift(
+        { url: source.url, ref: source.ref },
+        { cacheDir: opts.cacheDir },
+      );
+      status.drift = drift.drift;
+      status.upstreamSha = drift.upstreamSha ?? undefined;
+      if (drift.error) status.driftError = drift.error;
+    } catch (err) {
+      status.driftError = err instanceof Error ? err.message : String(err);
+    }
+  }
+  return { kind: 'git', url: source.url, ref: source.ref, status };
+}
+
+function formatStatusLine(s: SourceStatus): string {
+  if (s.kind === 'path') {
+    const tag = s.exists ? brand.done('exists') : brand.warn('missing');
+    return `${brand.bold('path')}  ${s.path}  ${tag}\n`;
+  }
+
+  const display = s.ref ? `${s.url}@${s.ref}` : s.url;
+  let tail: string;
+  if (!s.status.cached) {
+    tail = brand.dim('uncached');
+  } else {
+    const sha = s.status.sha?.slice(0, 7) ?? '?';
+    const fetchedAt = s.status.fetchedAt ? ` ${brand.dim(`fetched ${s.status.fetchedAt}`)}` : '';
+    const drift = s.status.drift
+      ? brand.warn(`drift → upstream ${s.status.upstreamSha?.slice(0, 7) ?? '?'}`)
+      : brand.done('fresh');
+    tail = `${brand.dim(sha)}${fetchedAt}  ${drift}`;
+  }
+  const errSuffix = s.status.driftError ? `  ${brand.dim(`(${s.status.driftError})`)}` : '';
+  return `${brand.bold('git ')}  ${display}  ${tail}${errSuffix}\n`;
+}
+
+async function pathExists(p: string): Promise<boolean> {
+  try {
+    await stat(p);
+    return true;
+  } catch {
+    return false;
+  }
+}
