@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- M4 — post-scaffold setup tasks. Templates can declare a `setup:` block in `.hex/manifest.yaml` with an optional `message` and `tasks` (each with `id`, `title`, optional `detail`). Hex tracks user progress in the generated app's `.hex/checklist.yaml`. When `hex new` finishes rendering, it writes the checklist, prints the message, and on a TTY walks the user through each task interactively — `Mark as done` / `Skip for now` / `Quit`. State persists after every toggle so a hard exit cannot lose progress.
+- `hex setup` — resume the interactive loop from any directory inside a generated app (walks upward from cwd to find `.hex/checklist.yaml`, matching how `git`/`npm` find their roots). Walks all tasks regardless of status; done tasks can be flipped back to pending.
+- `hex doctor` — when run inside a generated app, appends an "Outstanding setup tasks" section listing pending task ids + titles. Stays silent when no checklist is found or every task is already done.
+- `hex new --no-setup` — skip the post-render interactive loop. Non-TTY invocations skip automatically and print "N setup tasks pending — run hex setup".
+- `node-ts-cli` template gains an `include_publish_workflow` prompt (default true) gating a `.github/workflows/publish.yml` that publishes on `v*` tag, plus a four-task `setup:` block (install deps, init git + push, set NPM_TOKEN, tag first release).
+
 ## [0.5.0] — 2026-05-06
 
 ### Added

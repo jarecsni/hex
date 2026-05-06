@@ -33,6 +33,17 @@ npm start hello
 | `npm run lint` | Biome lint |
 | `npm run format` | Biome format-write |
 
-## License
+{% if include_publish_workflow %}## Releasing
+
+`.github/workflows/publish.yml` publishes to npm on tag push:
+
+```sh
+npm version 0.1.0    # bumps package.json + creates a git tag
+git push --follow-tags
+```
+
+The workflow needs the `NPM_TOKEN` repo secret set (`gh secret set NPM_TOKEN`).
+
+{% endif %}## License
 
 {{ license }}{% if author %} © {{ author }}{% endif %}
