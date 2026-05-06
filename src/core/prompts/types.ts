@@ -66,6 +66,12 @@ export interface Prompter {
   sectionStart?(info: SectionInfo): void;
   sectionEnd?(info: SectionInfo): void;
   progress?(info: ProgressInfo): void;
+  /**
+   * Render a free-form note to the user (e.g. a task title + detail block
+   * before a follow-up `select`). Optional — implementations may omit it,
+   * scripted prompters typically do.
+   */
+  note?(body: string, title?: string): void;
 }
 
 export class PromptCancelledError extends Error {
