@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.0] — 2026-05-06
+
 ### Added
 
 - M3 — `GitSource`. Source roots in `~/.hex/config.yaml` now accept `{ git: <url>, ref?: <branch|tag|sha> }` alongside `{ path: <dir> }`. Repos are cloned lazily into `~/.hex/cache/git/<urlHash>/<refSlug>-<refHash>/repo/` (override the cache root via `HEX_CACHE_DIR`) on first use; subsequent commands hit the cache without touching the network. Auth flows through the system `git` (SSH agent, credential helpers, `~/.gitconfig`). Cold-cache fetches use `git init && fetch --depth 1 && checkout FETCH_HEAD`, which works uniformly for branches, tags, and reachable SHAs.
