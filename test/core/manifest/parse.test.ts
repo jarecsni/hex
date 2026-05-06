@@ -290,3 +290,81 @@ describe('parseManifestObject — sections', () => {
     ).toThrow(ManifestError);
   });
 });
+
+describe('parseManifestObject — setup', () => {
+  it('accepts a manifest with setup.message and setup.tasks', () => {
+    const m = parseManifestObject({
+      ...baseManifest,
+      setup: {
+        message: 'A few things to wire up:',
+        tasks: [
+          { id: 'install-deps', title: 'Install dependencies', detail: 'npm install' },
+          { id: 'push-to-github', title: 'Push to GitHub for first deploy' },
+        ],
+      },
+    });
+    expect(m.setup?.message).toBe('A few things to wire up:');
+    expect(m.setup?.tasks).toHaveLength(2);
+    expect(m.setup?.tasks?.[0]).toEqual({
+      id: 'install-deps',
+      title: 'Install dependencies',
+      detail: 'npm install',
+    });
+    expect(m.setup?.tasks?.[1]?.detail).toBeUndefined();
+  });
+
+  it('accepts a setup block with only a message', () => {
+    const m = parseManifestObject({
+      ...baseManifest,
+      setup: { message: 'all yours' },
+    });
+    expect(m.setup?.message).toBe('all yours');
+    expect(m.setup?.tasks).toBeUndefined();
+  });
+
+  it('treats an absent setup block as undefined', () => {
+    const m = parseManifestObject(baseManifest);
+    expect(m.setup).toBeUndefined();
+  });
+
+  it('rejects a task id that is not kebab-case', () => {
+    expect(() =>
+      parseManifestObject({
+        ...baseManifest,
+        setup: { tasks: [{ id: 'Install_Deps', title: 'Install' }] },
+      }),
+    ).toThrow(/kebab-case/);
+  });
+
+  it('rejects a task id with leading/trailing dashes', () => {
+    expect(() =>
+      parseManifestObject({
+        ...baseManifest,
+        setup: { tasks: [{ id: '-bad', title: 'x' }] },
+      }),
+    ).toThrow(/kebab-case/);
+  });
+
+  it('rejects duplicate task ids', () => {
+    expect(() =>
+      parseManifestObject({
+        ...baseManifest,
+        setup: {
+          tasks: [
+            { id: 'one', title: 'A' },
+            { id: 'one', title: 'B' },
+          ],
+        },
+      }),
+    ).toThrow(/appears more than once/);
+  });
+
+  it('rejects a task with an empty title', () => {
+    expect(() =>
+      parseManifestObject({
+        ...baseManifest,
+        setup: { tasks: [{ id: 'ok', title: '' }] },
+      }),
+    ).toThrow(ManifestError);
+  });
+});

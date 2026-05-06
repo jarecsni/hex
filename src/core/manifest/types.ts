@@ -76,6 +76,17 @@ export type Section = {
   prompts: string[];
 };
 
+export type SetupTask = {
+  id: string;
+  title: string;
+  detail?: string;
+};
+
+export type Setup = {
+  message?: string;
+  tasks?: SetupTask[];
+};
+
 export type Manifest = {
   type: 'component' | 'recipe';
   name: string;
@@ -85,4 +96,5 @@ export type Manifest = {
   sections?: Section[];
   hooks?: Hooks;
   include?: IncludeRule[];
+  setup?: Setup;
 };

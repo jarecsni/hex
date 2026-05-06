@@ -104,6 +104,22 @@ export const sectionSchema = z.object({
 
 const SEMVER_RE = /^\d+\.\d+\.\d+(?:[-+].*)?$/;
 
+const TASK_ID_RE = /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/;
+
+export const setupTaskSchema = z.object({
+  id: z
+    .string()
+    .min(1)
+    .regex(TASK_ID_RE, 'task id must be kebab-case ([a-z0-9-], no leading/trailing dash)'),
+  title: z.string().min(1),
+  detail: z.string().optional(),
+});
+
+export const setupSchema = z.object({
+  message: z.string().min(1).optional(),
+  tasks: z.array(setupTaskSchema).optional(),
+});
+
 // Manifest schema with prompts already desugared (each entry { name, def }).
 // `sections:` opts the manifest into total coverage — every prompt must
 // appear in exactly one section, and section entries must reference real
@@ -126,8 +142,25 @@ export const manifestSchema = z
     sections: z.array(sectionSchema).optional(),
     hooks: hooksSchema.optional(),
     include: z.array(includeRuleSchema).optional(),
+    setup: setupSchema.optional(),
   })
   .superRefine((manifest, ctx) => {
+    if (manifest.setup?.tasks) {
+      const seenIds = new Map<string, number>();
+      manifest.setup.tasks.forEach((task, idx) => {
+        const previous = seenIds.get(task.id);
+        if (previous !== undefined) {
+          ctx.addIssue({
+            code: 'custom',
+            path: ['setup', 'tasks', idx, 'id'],
+            message: `setup task id "${task.id}" appears more than once (also at index ${previous})`,
+          });
+          return;
+        }
+        seenIds.set(task.id, idx);
+      });
+    }
+
     if (!manifest.sections) return;
 
     const promptNames = new Set((manifest.prompts ?? []).map((p) => p.name));
