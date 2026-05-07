@@ -3,6 +3,11 @@ import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import {
+  checklistFromTasks,
+  readChecklistUpward,
+  writeChecklist,
+} from '../../src/core/checklist/index.js';
 import { runPrompts } from '../../src/core/prompts/engine.js';
 import type { Prompter } from '../../src/core/prompts/types.js';
 import { renderBundle } from '../../src/core/render/engine.js';
@@ -27,6 +32,7 @@ type FixtureAnswers = {
   license: string;
   include_examples: boolean;
   include_self_update: boolean;
+  include_publish_workflow: boolean;
 };
 
 function fixedPrompter(answers: FixtureAnswers): Prompter {
@@ -47,6 +53,8 @@ function fixedPrompter(answers: FixtureAnswers): Prompter {
       if (opts.message === 'Include an example "hello" command?') return answers.include_examples;
       if (opts.message === 'Include a self-update prompt on launch?')
         return answers.include_self_update;
+      if (opts.message === 'Include a GitHub Actions workflow that publishes on tag?')
+        return answers.include_publish_workflow;
       throw new Error(`unexpected confirm prompt: ${opts.message}`);
     },
     async select(opts) {
@@ -74,6 +82,7 @@ describe('node-ts-cli template — end-to-end', () => {
         license: 'MIT',
         include_examples: true,
         include_self_update: true,
+        include_publish_workflow: true,
       }),
       {},
       bundle.manifest.sections,
@@ -128,6 +137,22 @@ describe('node-ts-cli template — end-to-end', () => {
     const readme = await readFile(join(out, 'README.md'), 'utf8');
     expect(readme).toContain('# my-cli');
     expect(readme).toContain('MIT © Alice');
+
+    // Publish workflow rendered (include_publish_workflow = true)
+    expect(existsSync(join(out, '.github/workflows/publish.yml'))).toBe(true);
+    const workflow = await readFile(join(out, '.github/workflows/publish.yml'), 'utf8');
+    expect(workflow).toContain('NPM_TOKEN');
+    expect(readme).toContain('Releasing');
+
+    // The setup block is on the manifest itself; the loop runs in hex new
+    // (not renderBundle). What we can assert here: the manifest exposes
+    // the tasks for downstream tooling.
+    expect(bundle.manifest.setup?.tasks?.map((t) => t.id).sort()).toEqual([
+      'first-release',
+      'git-init',
+      'install-deps',
+      'set-npm-token',
+    ]);
   });
 
   it('drops example command, src/examples/, and self-update when both are off', async () => {
@@ -141,6 +166,7 @@ describe('node-ts-cli template — end-to-end', () => {
         license: 'Apache-2.0',
         include_examples: false,
         include_self_update: false,
+        include_publish_workflow: false,
       }),
       {},
       bundle.manifest.sections,
@@ -166,6 +192,11 @@ describe('node-ts-cli template — end-to-end', () => {
     // LICENSE picked up Apache branch
     const license = await readFile(join(out, 'LICENSE'), 'utf8');
     expect(license).toContain('Apache License');
+
+    // Publish workflow excluded by include rule (include_publish_workflow = false)
+    expect(existsSync(join(out, '.github/workflows/publish.yml'))).toBe(false);
+    const readme = await readFile(join(out, 'README.md'), 'utf8');
+    expect(readme).not.toContain('Releasing');
   });
 
   it('renders self-update without examples (mixed flags)', async () => {
@@ -179,6 +210,7 @@ describe('node-ts-cli template — end-to-end', () => {
         license: 'MIT',
         include_examples: false,
         include_self_update: true,
+        include_publish_workflow: true,
       }),
       {},
       bundle.manifest.sections,
@@ -195,6 +227,43 @@ describe('node-ts-cli template — end-to-end', () => {
     expect(cli).not.toContain('hello [name]');
   });
 
+  it('post-render: writes .hex/checklist.yaml with all tasks pending', async () => {
+    const bundle = await loadFromPath(TEMPLATE_PATH);
+    const answers = await runPrompts(
+      bundle.manifest.prompts ?? [],
+      fixedPrompter({
+        project_name: 'mycli',
+        description: '',
+        author: '',
+        license: 'MIT',
+        include_examples: false,
+        include_self_update: false,
+        include_publish_workflow: true,
+      }),
+      {},
+      bundle.manifest.sections,
+    );
+
+    const out = join(work, 'mycli');
+    await renderBundle(bundle, out, answers);
+
+    // Mirror what `hex new` does after rendering when setup tasks exist.
+    const tasks = bundle.manifest.setup?.tasks ?? [];
+    expect(tasks.length).toBeGreaterThan(0);
+    await writeChecklist(out, checklistFromTasks(tasks));
+
+    const loaded = await readChecklistUpward(out);
+    expect(loaded).not.toBeNull();
+    expect(loaded?.rootDir).toBe(out);
+    expect(loaded?.checklist.tasks.map((t) => t.id).sort()).toEqual([
+      'first-release',
+      'git-init',
+      'install-deps',
+      'set-npm-token',
+    ]);
+    expect(loaded?.checklist.tasks.every((t) => t.status === 'pending')).toBe(true);
+  });
+
   it('rejects an invalid project_name (pattern fails)', async () => {
     const bundle = await loadFromPath(TEMPLATE_PATH);
     await expect(
@@ -207,6 +276,7 @@ describe('node-ts-cli template — end-to-end', () => {
           license: 'MIT',
           include_examples: true,
           include_self_update: true,
+          include_publish_workflow: true,
         }),
         {},
         bundle.manifest.sections,

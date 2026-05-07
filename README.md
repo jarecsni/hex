@@ -39,6 +39,36 @@ silent — Hex never blocks offline use.
 > for arbitrary commits not reachable from a default branch — branches
 > and tags don't need this.
 
+## Post-scaffold setup tasks
+
+Templates can declare a `setup:` block in `.hex/manifest.yaml` listing
+post-scaffold work the user must complete (install deps, set CI secrets,
+push to a remote, etc.):
+
+```yaml
+setup:
+  message: |
+    Your project is scaffolded. A few things to wire up:
+  tasks:
+    - id: install-deps
+      title: Install dependencies
+      detail: npm install
+    - id: set-npm-token
+      title: Set NPM_TOKEN secret on the GitHub repo
+      detail: gh secret set NPM_TOKEN
+```
+
+When `hex new` finishes rendering, it writes the generated app's
+`.hex/checklist.yaml`, prints the `setup.message`, and (on a TTY) walks
+the user through each task interactively — they pick `Mark as done`,
+`Skip for now`, or `Quit`. Quitting saves progress; the user resumes any
+time with `hex setup` (which finds the checklist by walking upward from
+cwd, like `git`/`npm`).
+
+`hex doctor` shows outstanding tasks as a reminder section when run from
+inside a generated app. `hex new --no-setup` skips the post-render loop
+entirely.
+
 ## Try it
 
 ```sh

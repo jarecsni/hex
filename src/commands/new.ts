@@ -4,6 +4,7 @@ import * as clack from '@clack/prompts';
 import type { Command } from 'commander';
 import { brand } from '../brand/colors.js';
 import { splash } from '../brand/splash.js';
+import { checklistFromTasks, writeChecklist } from '../core/checklist/index.js';
 import { loadConfig } from '../core/config/load.js';
 import { type TemplateEntry, discoverTemplates } from '../core/discovery/index.js';
 import { createClackPrompter } from '../core/prompts/clack-prompter.js';
@@ -11,6 +12,7 @@ import { runPrompts } from '../core/prompts/engine.js';
 import { PromptCancelledError } from '../core/prompts/types.js';
 import { renderBundle } from '../core/render/engine.js';
 import { type ComponentBundle, loadFromPath } from '../core/sources/file-source.js';
+import { printSetupOutro, runSetupSession } from './setup.js';
 
 export class NewCommandError extends Error {
   constructor(message: string) {
@@ -26,11 +28,12 @@ export function registerNew(program: Command): void {
     .argument('[template]', 'template path or registered name (omit to pick interactively)')
     .argument('[output]', 'path where the generated project will be written')
     .option('-f, --force', 'overwrite a non-empty output directory', false)
+    .option('--no-setup', 'skip the post-render interactive setup loop')
     .action(
       async (
         templateArg: string | undefined,
         outputArg: string | undefined,
-        opts: { force: boolean },
+        opts: { force: boolean; setup: boolean },
       ) => {
         process.stdout.write(`${splash()}\n`);
         clack.intro(brand.honeyBold(' hex new '));
@@ -60,7 +63,34 @@ export function registerNew(program: Command): void {
           );
         }
 
-        clack.outro(brand.done(`done — ${outputDir}`));
+        const tasks = bundle.manifest.setup?.tasks ?? [];
+        if (tasks.length === 0) {
+          clack.outro(brand.done(`done — ${outputDir}`));
+          return;
+        }
+
+        // Write the initial checklist before doing anything else, so a hard
+        // exit at this point still leaves the project in a recoverable state.
+        const initial = checklistFromTasks(tasks);
+        await writeChecklist(outputDir, initial);
+
+        if (bundle.manifest.setup?.message) {
+          clack.note(bundle.manifest.setup.message, 'Post-scaffold setup');
+        }
+
+        const interactive = process.stdout.isTTY && opts.setup;
+        if (!interactive) {
+          clack.outro(
+            `${tasks.length} setup tasks pending — run ${brand.bold('hex setup')} from ${outputDir}`,
+          );
+          return;
+        }
+
+        const setupResult = await runSetupSession(
+          { rootDir: outputDir, checklist: initial },
+          createClackPrompter(),
+        );
+        printSetupOutro(setupResult);
       },
     );
 }

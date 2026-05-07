@@ -1,6 +1,6 @@
 type: component
 name: node-ts-cli
-version: 0.1.0
+version: 0.2.0
 kind: cli
 
 prompts:
@@ -30,6 +30,10 @@ prompts:
       type: boolean
       default: true
       description: Include a self-update prompt on launch?
+  - include_publish_workflow:
+      type: boolean
+      default: true
+      description: Include a GitHub Actions workflow that publishes on tag?
 
 # Section grouping drives the questionnaire UX — outline shown up front,
 # header per section, (N/M) progress per question. Every prompt must be
@@ -40,15 +44,51 @@ sections:
   - title: Licence
     prompts: [license]
   - title: Features
-    prompts: [include_examples, include_self_update]
+    prompts: [include_examples, include_self_update, include_publish_workflow]
 
 # `include:` gates whole files; the `delete` hook below clears subtrees.
 # Use `include:` for single-file gating (one rule per file) and the
 # `delete` hook for many-file subtree gating against a glob.
 include:
   - { path: 'src/update.ts', when: 'include_self_update' }
+  - { path: '.github/workflows/publish.yml', when: 'include_publish_workflow' }
 
 hooks:
   post_render:
     - rename: { from: gitignore, to: .gitignore }
     - delete: { glob: 'src/examples/**', when: 'not include_examples' }
+
+# Post-scaffold tasks the user must complete before the project is fully
+# wired up. Hex tracks status in <project>/.hex/checklist.yaml; users walk
+# through them via the post-`hex new` interactive flow or `hex setup`.
+setup:
+  message: |
+    Your CLI is scaffolded. A few things to wire up before it can publish:
+  tasks:
+    - id: install-deps
+      title: Install dependencies
+      detail: |
+        cd into the project and run:
+          npm install
+    - id: git-init
+      title: Initialise git and connect a remote
+      detail: |
+        git init -b main
+        git add .
+        git commit -m "initial commit"
+        git remote add origin <your-github-url>
+        git push -u origin main
+    - id: set-npm-token
+      title: Set NPM_TOKEN secret on the GitHub repo
+      detail: |
+        Generate an automation token at https://www.npmjs.com/settings/<you>/tokens
+        Then add it as a repo secret:
+          gh secret set NPM_TOKEN
+        (Skip this task if you opted out of the publish workflow.)
+    - id: first-release
+      title: Tag and push your first release
+      detail: |
+        npm version 0.1.0
+        git push --follow-tags
+        The publish workflow will build and push the package to npm.
+        (Skip if you opted out of the publish workflow.)

@@ -90,5 +90,9 @@ export function createClackPrompter(): Prompter {
     progress(info: ProgressInfo): void {
       pendingProgress = info;
     },
+
+    note(body: string, title?: string): void {
+      clack.note(body, title);
+    },
   };
 }
