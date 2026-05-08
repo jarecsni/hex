@@ -368,3 +368,137 @@ describe('parseManifestObject — setup', () => {
     ).toThrow(ManifestError);
   });
 });
+
+describe('parseManifestObject — composes (M5.1)', () => {
+  const baseRecipe = {
+    type: 'recipe' as const,
+    name: 'fullstack-app',
+    version: '0.1.0',
+  };
+
+  it('accepts a recipe with a single composes entry, parsing name + versionSpec', () => {
+    const m = parseManifestObject({
+      ...baseRecipe,
+      composes: { cli: 'node-ts-cli@^0.1.0' },
+    });
+    expect(m.composes).toEqual({
+      cli: { name: 'node-ts-cli', versionSpec: '^0.1.0' },
+    });
+  });
+
+  it('accepts multiple composes entries with different version-spec shapes', () => {
+    const m = parseManifestObject({
+      ...baseRecipe,
+      composes: {
+        cli: 'node-ts-cli@1.2.3',
+        api: 'express-api@~2.0.0',
+        db: 'postgres-stub@>=14.0.0',
+        ui: 'vite-spa@*',
+      },
+    });
+    expect(m.composes?.cli).toEqual({ name: 'node-ts-cli', versionSpec: '1.2.3' });
+    expect(m.composes?.api).toEqual({ name: 'express-api', versionSpec: '~2.0.0' });
+    expect(m.composes?.db).toEqual({ name: 'postgres-stub', versionSpec: '>=14.0.0' });
+    expect(m.composes?.ui).toEqual({ name: 'vite-spa', versionSpec: '*' });
+  });
+
+  it('parses scoped names by splitting on the last @', () => {
+    const m = parseManifestObject({
+      ...baseRecipe,
+      composes: { cli: '@hexology/node-ts-cli@^0.1.0' },
+    });
+    expect(m.composes?.cli).toEqual({
+      name: '@hexology/node-ts-cli',
+      versionSpec: '^0.1.0',
+    });
+  });
+
+  it('accepts prerelease and build-metadata version specs', () => {
+    const m = parseManifestObject({
+      ...baseRecipe,
+      composes: {
+        alpha: 'pkg@1.0.0-alpha.1',
+        beta: 'pkg@1.0.0+build.2',
+      },
+    });
+    expect(m.composes?.alpha?.versionSpec).toBe('1.0.0-alpha.1');
+    expect(m.composes?.beta?.versionSpec).toBe('1.0.0+build.2');
+  });
+
+  it('treats absent composes as undefined on a recipe', () => {
+    const m = parseManifestObject(baseRecipe);
+    expect(m.composes).toBeUndefined();
+  });
+
+  it('rejects composes on a component', () => {
+    expect(() =>
+      parseManifestObject({
+        ...baseManifest,
+        composes: { cli: 'node-ts-cli@^0.1.0' },
+      }),
+    ).toThrow(/only allowed on recipes/);
+  });
+
+  it('rejects a non-kebab-case key', () => {
+    expect(() =>
+      parseManifestObject({
+        ...baseRecipe,
+        composes: { CLI: 'node-ts-cli@^0.1.0' },
+      }),
+    ).toThrow(/kebab-case/);
+  });
+
+  it('rejects a key with a leading dash', () => {
+    expect(() =>
+      parseManifestObject({
+        ...baseRecipe,
+        composes: { '-cli': 'node-ts-cli@^0.1.0' },
+      }),
+    ).toThrow(/kebab-case/);
+  });
+
+  it('rejects an entry missing the @version part', () => {
+    expect(() =>
+      parseManifestObject({
+        ...baseRecipe,
+        composes: { cli: 'node-ts-cli' },
+      }),
+    ).toThrow(/<name>@<version>/);
+  });
+
+  it('rejects an entry whose version spec is malformed', () => {
+    expect(() =>
+      parseManifestObject({
+        ...baseRecipe,
+        composes: { cli: 'node-ts-cli@1.x' },
+      }),
+    ).toThrow(/version spec/);
+  });
+
+  it('rejects an entry with an incomplete semver triplet', () => {
+    expect(() =>
+      parseManifestObject({
+        ...baseRecipe,
+        composes: { cli: 'node-ts-cli@1.2' },
+      }),
+    ).toThrow(/version spec/);
+  });
+
+  it('rejects an empty entry string', () => {
+    expect(() =>
+      parseManifestObject({
+        ...baseRecipe,
+        composes: { cli: '' },
+      }),
+    ).toThrow(ManifestError);
+  });
+
+  it('rejects an entry with whitespace in the name', () => {
+    expect(() =>
+      parseManifestObject({
+        ...baseRecipe,
+        composes: { cli: 'bad name@1.0.0' },
+      }),
+    ).toThrow(/whitespace/);
+  });
+});

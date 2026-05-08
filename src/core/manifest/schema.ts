@@ -120,6 +120,50 @@ export const setupSchema = z.object({
   tasks: z.array(setupTaskSchema).optional(),
 });
 
+export const KEBAB_KEY_RE = /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/;
+
+// Permissive but not loose: optional comparator + strict semver triplet,
+// optional prerelease/build metadata, or bare `*`. Looser ranges (e.g. `1.x`,
+// hyphen ranges) are deliberately rejected for now — a real recipe can ask
+// to relax this if needed.
+const VERSION_SPEC_RE =
+  /^(?:\^|~|>=|<=|>|<|=)?\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$|^\*$/;
+
+// Splits "<name>@<versionSpec>" on the LAST '@' so scoped names like
+// "@hexology/node-ts-cli@^0.1.0" parse correctly.
+export const composesEntrySchema = z
+  .string()
+  .min(1)
+  .transform((spec, ctx) => {
+    const lastAt = spec.lastIndexOf('@');
+    if (lastAt <= 0) {
+      ctx.addIssue({
+        code: 'custom',
+        message: `composes entry "${spec}" must be of the form "<name>@<version>"`,
+      });
+      return z.NEVER;
+    }
+    const name = spec.slice(0, lastAt);
+    const versionSpec = spec.slice(lastAt + 1);
+    if (/\s/.test(name)) {
+      ctx.addIssue({
+        code: 'custom',
+        message: `composes entry name "${name}" must not contain whitespace`,
+      });
+      return z.NEVER;
+    }
+    if (!VERSION_SPEC_RE.test(versionSpec)) {
+      ctx.addIssue({
+        code: 'custom',
+        message: `composes entry version spec "${versionSpec}" is not a recognized semver spec`,
+      });
+      return z.NEVER;
+    }
+    return { name, versionSpec };
+  });
+
+export const composesSchema = z.record(z.string(), composesEntrySchema);
+
 // Manifest schema with prompts already desugared (each entry { name, def }).
 // `sections:` opts the manifest into total coverage — every prompt must
 // appear in exactly one section, and section entries must reference real
@@ -143,8 +187,28 @@ export const manifestSchema = z
     hooks: hooksSchema.optional(),
     include: z.array(includeRuleSchema).optional(),
     setup: setupSchema.optional(),
+    composes: composesSchema.optional(),
   })
   .superRefine((manifest, ctx) => {
+    if (manifest.composes) {
+      if (manifest.type !== 'recipe') {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['composes'],
+          message: '`composes` is only allowed on recipes (type: recipe)',
+        });
+      }
+      for (const key of Object.keys(manifest.composes)) {
+        if (!KEBAB_KEY_RE.test(key)) {
+          ctx.addIssue({
+            code: 'custom',
+            path: ['composes', key],
+            message: `composes key "${key}" must be kebab-case ([a-z0-9-], no leading/trailing dash)`,
+          });
+        }
+      }
+    }
+
     if (manifest.setup?.tasks) {
       const seenIds = new Map<string, number>();
       manifest.setup.tasks.forEach((task, idx) => {

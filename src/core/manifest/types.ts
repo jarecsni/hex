@@ -87,6 +87,13 @@ export type Setup = {
   tasks?: SetupTask[];
 };
 
+export type ComposesEntry = {
+  name: string;
+  versionSpec: string;
+};
+
+export type Composes = Record<string, ComposesEntry>;
+
 export type Manifest = {
   type: 'component' | 'recipe';
   name: string;
@@ -97,4 +104,5 @@ export type Manifest = {
   hooks?: Hooks;
   include?: IncludeRule[];
   setup?: Setup;
+  composes?: Composes;
 };
