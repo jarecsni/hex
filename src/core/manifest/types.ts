@@ -87,12 +87,26 @@ export type Setup = {
   tasks?: SetupTask[];
 };
 
-export type ComposesEntry = {
+export type NameChildRef = {
+  kind: 'name';
   name: string;
   versionSpec: string;
 };
 
-export type Composes = Record<string, ComposesEntry>;
+export type FileChildRef = {
+  kind: 'file';
+  path: string;
+};
+
+export type GitChildRef = {
+  kind: 'git';
+  url: string;
+  ref?: string;
+};
+
+export type ChildRef = NameChildRef | FileChildRef | GitChildRef;
+
+export type Composes = Record<string, ChildRef>;
 
 export type Manifest = {
   type: 'component' | 'recipe';

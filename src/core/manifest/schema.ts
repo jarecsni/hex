@@ -129,17 +129,59 @@ export const KEBAB_KEY_RE = /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/;
 const VERSION_SPEC_RE =
   /^(?:\^|~|>=|<=|>|<|=)?\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$|^\*$/;
 
-// Splits "<name>@<versionSpec>" on the LAST '@' so scoped names like
-// "@hexology/node-ts-cli@^0.1.0" parse correctly.
+// Three wire forms, dispatched by prefix:
+//   - `file:<path>`           → local FileSource (path relative to recipe root)
+//   - `git+<url>[@<ref>]`     → GitSource (last `@` is the ref iff what follows
+//                               looks ref-like — i.e. has no `:`, which would
+//                               mark it as part of an `git@host:path` URL)
+//   - `<name>@<versionSpec>`  → bare name, resolved via configured source roots
+//
+// The scoped-name case (`@hexology/foo@^0.1.0`) parses by splitting on the
+// LAST `@` after stripping the optional prefix.
 export const composesEntrySchema = z
   .string()
   .min(1)
   .transform((spec, ctx) => {
+    if (spec.startsWith('file:')) {
+      const path = spec.slice('file:'.length);
+      if (path.length === 0) {
+        ctx.addIssue({
+          code: 'custom',
+          message: `composes entry "${spec}" has an empty path after "file:"`,
+        });
+        return z.NEVER;
+      }
+      return { kind: 'file' as const, path };
+    }
+
+    if (spec.startsWith('git+')) {
+      const rest = spec.slice('git+'.length);
+      if (rest.length === 0) {
+        ctx.addIssue({
+          code: 'custom',
+          message: `composes entry "${spec}" has an empty URL after "git+"`,
+        });
+        return z.NEVER;
+      }
+      const lastAt = rest.lastIndexOf('@');
+      if (lastAt === -1) {
+        return { kind: 'git' as const, url: rest };
+      }
+      const possibleRef = rest.slice(lastAt + 1);
+      // SSH URLs look like `git@host:path` — the `@` is part of the URL,
+      // not a ref delimiter. The trailing piece will contain `:` in that
+      // case, which gives us a clean discriminator.
+      if (possibleRef.length === 0 || possibleRef.includes(':')) {
+        return { kind: 'git' as const, url: rest };
+      }
+      return { kind: 'git' as const, url: rest.slice(0, lastAt), ref: possibleRef };
+    }
+
     const lastAt = spec.lastIndexOf('@');
     if (lastAt <= 0) {
       ctx.addIssue({
         code: 'custom',
-        message: `composes entry "${spec}" must be of the form "<name>@<version>"`,
+        message: `composes entry "${spec}" must be of the form "<name>@<version>", "file:<path>", or "git+<url>[@<ref>]"`,
       });
       return z.NEVER;
     }
@@ -159,7 +201,7 @@ export const composesEntrySchema = z
       });
       return z.NEVER;
     }
-    return { name, versionSpec };
+    return { kind: 'name' as const, name, versionSpec };
   });
 
 export const composesSchema = z.record(z.string(), composesEntrySchema);

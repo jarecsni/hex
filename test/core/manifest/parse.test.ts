@@ -382,7 +382,7 @@ describe('parseManifestObject — composes (M5.1)', () => {
       composes: { cli: 'node-ts-cli@^0.1.0' },
     });
     expect(m.composes).toEqual({
-      cli: { name: 'node-ts-cli', versionSpec: '^0.1.0' },
+      cli: { kind: 'name', name: 'node-ts-cli', versionSpec: '^0.1.0' },
     });
   });
 
@@ -396,10 +396,14 @@ describe('parseManifestObject — composes (M5.1)', () => {
         ui: 'vite-spa@*',
       },
     });
-    expect(m.composes?.cli).toEqual({ name: 'node-ts-cli', versionSpec: '1.2.3' });
-    expect(m.composes?.api).toEqual({ name: 'express-api', versionSpec: '~2.0.0' });
-    expect(m.composes?.db).toEqual({ name: 'postgres-stub', versionSpec: '>=14.0.0' });
-    expect(m.composes?.ui).toEqual({ name: 'vite-spa', versionSpec: '*' });
+    expect(m.composes?.cli).toEqual({ kind: 'name', name: 'node-ts-cli', versionSpec: '1.2.3' });
+    expect(m.composes?.api).toEqual({ kind: 'name', name: 'express-api', versionSpec: '~2.0.0' });
+    expect(m.composes?.db).toEqual({
+      kind: 'name',
+      name: 'postgres-stub',
+      versionSpec: '>=14.0.0',
+    });
+    expect(m.composes?.ui).toEqual({ kind: 'name', name: 'vite-spa', versionSpec: '*' });
   });
 
   it('parses scoped names by splitting on the last @', () => {
@@ -408,6 +412,7 @@ describe('parseManifestObject — composes (M5.1)', () => {
       composes: { cli: '@hexology/node-ts-cli@^0.1.0' },
     });
     expect(m.composes?.cli).toEqual({
+      kind: 'name',
       name: '@hexology/node-ts-cli',
       versionSpec: '^0.1.0',
     });
@@ -421,8 +426,8 @@ describe('parseManifestObject — composes (M5.1)', () => {
         beta: 'pkg@1.0.0+build.2',
       },
     });
-    expect(m.composes?.alpha?.versionSpec).toBe('1.0.0-alpha.1');
-    expect(m.composes?.beta?.versionSpec).toBe('1.0.0+build.2');
+    expect(m.composes?.alpha).toMatchObject({ kind: 'name', versionSpec: '1.0.0-alpha.1' });
+    expect(m.composes?.beta).toMatchObject({ kind: 'name', versionSpec: '1.0.0+build.2' });
   });
 
   it('treats absent composes as undefined on a recipe', () => {
@@ -500,5 +505,119 @@ describe('parseManifestObject — composes (M5.1)', () => {
         composes: { cli: 'bad name@1.0.0' },
       }),
     ).toThrow(/whitespace/);
+  });
+});
+
+describe('parseManifestObject — composes (M5.2 wire forms)', () => {
+  const baseRecipe = {
+    type: 'recipe' as const,
+    name: 'fullstack-app',
+    version: '0.1.0',
+  };
+
+  it('parses a "file:" entry with a relative path', () => {
+    const m = parseManifestObject({
+      ...baseRecipe,
+      composes: { cli: 'file:./local/cli' },
+    });
+    expect(m.composes?.cli).toEqual({ kind: 'file', path: './local/cli' });
+  });
+
+  it('parses a "file:" entry with an absolute path', () => {
+    const m = parseManifestObject({
+      ...baseRecipe,
+      composes: { cli: 'file:/abs/path/to/cli' },
+    });
+    expect(m.composes?.cli).toEqual({ kind: 'file', path: '/abs/path/to/cli' });
+  });
+
+  it('rejects "file:" with no path', () => {
+    expect(() =>
+      parseManifestObject({
+        ...baseRecipe,
+        composes: { cli: 'file:' },
+      }),
+    ).toThrow(/empty path/);
+  });
+
+  it('parses a "git+" https URL with a ref', () => {
+    const m = parseManifestObject({
+      ...baseRecipe,
+      composes: { cli: 'git+https://github.com/acme/cli@main' },
+    });
+    expect(m.composes?.cli).toEqual({
+      kind: 'git',
+      url: 'https://github.com/acme/cli',
+      ref: 'main',
+    });
+  });
+
+  it('parses a "git+" https URL with no ref', () => {
+    const m = parseManifestObject({
+      ...baseRecipe,
+      composes: { cli: 'git+https://github.com/acme/cli' },
+    });
+    expect(m.composes?.cli).toEqual({
+      kind: 'git',
+      url: 'https://github.com/acme/cli',
+    });
+  });
+
+  it('parses a "git+" SSH URL without confusing the host @ for a ref delimiter', () => {
+    const m = parseManifestObject({
+      ...baseRecipe,
+      composes: { cli: 'git+git@github.com:acme/cli.git' },
+    });
+    expect(m.composes?.cli).toEqual({
+      kind: 'git',
+      url: 'git@github.com:acme/cli.git',
+    });
+  });
+
+  it('parses a "git+" SSH URL with a ref appended', () => {
+    const m = parseManifestObject({
+      ...baseRecipe,
+      composes: { cli: 'git+git@github.com:acme/cli.git@v1.2.3' },
+    });
+    expect(m.composes?.cli).toEqual({
+      kind: 'git',
+      url: 'git@github.com:acme/cli.git',
+      ref: 'v1.2.3',
+    });
+  });
+
+  it('parses a "git+" entry with a slash-bearing branch ref', () => {
+    const m = parseManifestObject({
+      ...baseRecipe,
+      composes: { cli: 'git+https://github.com/acme/cli@release/1.0' },
+    });
+    expect(m.composes?.cli).toEqual({
+      kind: 'git',
+      url: 'https://github.com/acme/cli',
+      ref: 'release/1.0',
+    });
+  });
+
+  it('rejects "git+" with no URL', () => {
+    expect(() =>
+      parseManifestObject({
+        ...baseRecipe,
+        composes: { cli: 'git+' },
+      }),
+    ).toThrow(/empty URL/);
+  });
+
+  it('mixes all three forms in the same recipe', () => {
+    const m = parseManifestObject({
+      ...baseRecipe,
+      composes: {
+        cli: 'node-ts-cli@^0.1.0',
+        api: 'file:./packages/api',
+        ui: 'git+https://github.com/acme/ui@main',
+      },
+    });
+    expect(m.composes?.cli?.kind).toBe('name');
+    expect(m.composes?.api?.kind).toBe('file');
+    expect(m.composes?.ui?.kind).toBe('git');
   });
 });
