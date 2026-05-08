@@ -120,6 +120,92 @@ export const setupSchema = z.object({
   tasks: z.array(setupTaskSchema).optional(),
 });
 
+export const KEBAB_KEY_RE = /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/;
+
+// Permissive but not loose: optional comparator + strict semver triplet,
+// optional prerelease/build metadata, or bare `*`. Looser ranges (e.g. `1.x`,
+// hyphen ranges) are deliberately rejected for now — a real recipe can ask
+// to relax this if needed.
+const VERSION_SPEC_RE =
+  /^(?:\^|~|>=|<=|>|<|=)?\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$|^\*$/;
+
+// Three wire forms, dispatched by prefix:
+//   - `file:<path>`           → local FileSource (path relative to recipe root)
+//   - `git+<url>[@<ref>]`     → GitSource (last `@` is the ref iff what follows
+//                               looks ref-like — i.e. has no `:`, which would
+//                               mark it as part of an `git@host:path` URL)
+//   - `<name>@<versionSpec>`  → bare name, resolved via configured source roots
+//
+// The scoped-name case (`@hexology/foo@^0.1.0`) parses by splitting on the
+// LAST `@` after stripping the optional prefix.
+export const composesEntrySchema = z
+  .string()
+  .min(1)
+  .transform((spec, ctx) => {
+    if (spec.startsWith('file:')) {
+      const path = spec.slice('file:'.length);
+      if (path.length === 0) {
+        ctx.addIssue({
+          code: 'custom',
+          message: `composes entry "${spec}" has an empty path after "file:"`,
+        });
+        return z.NEVER;
+      }
+      return { kind: 'file' as const, path };
+    }
+
+    if (spec.startsWith('git+')) {
+      const rest = spec.slice('git+'.length);
+      if (rest.length === 0) {
+        ctx.addIssue({
+          code: 'custom',
+          message: `composes entry "${spec}" has an empty URL after "git+"`,
+        });
+        return z.NEVER;
+      }
+      const lastAt = rest.lastIndexOf('@');
+      if (lastAt === -1) {
+        return { kind: 'git' as const, url: rest };
+      }
+      const possibleRef = rest.slice(lastAt + 1);
+      // SSH URLs look like `git@host:path` — the `@` is part of the URL,
+      // not a ref delimiter. The trailing piece will contain `:` in that
+      // case, which gives us a clean discriminator.
+      if (possibleRef.length === 0 || possibleRef.includes(':')) {
+        return { kind: 'git' as const, url: rest };
+      }
+      return { kind: 'git' as const, url: rest.slice(0, lastAt), ref: possibleRef };
+    }
+
+    const lastAt = spec.lastIndexOf('@');
+    if (lastAt <= 0) {
+      ctx.addIssue({
+        code: 'custom',
+        message: `composes entry "${spec}" must be of the form "<name>@<version>", "file:<path>", or "git+<url>[@<ref>]"`,
+      });
+      return z.NEVER;
+    }
+    const name = spec.slice(0, lastAt);
+    const versionSpec = spec.slice(lastAt + 1);
+    if (/\s/.test(name)) {
+      ctx.addIssue({
+        code: 'custom',
+        message: `composes entry name "${name}" must not contain whitespace`,
+      });
+      return z.NEVER;
+    }
+    if (!VERSION_SPEC_RE.test(versionSpec)) {
+      ctx.addIssue({
+        code: 'custom',
+        message: `composes entry version spec "${versionSpec}" is not a recognized semver spec`,
+      });
+      return z.NEVER;
+    }
+    return { kind: 'name' as const, name, versionSpec };
+  });
+
+export const composesSchema = z.record(z.string(), composesEntrySchema);
+
 // Manifest schema with prompts already desugared (each entry { name, def }).
 // `sections:` opts the manifest into total coverage — every prompt must
 // appear in exactly one section, and section entries must reference real
@@ -143,8 +229,28 @@ export const manifestSchema = z
     hooks: hooksSchema.optional(),
     include: z.array(includeRuleSchema).optional(),
     setup: setupSchema.optional(),
+    composes: composesSchema.optional(),
   })
   .superRefine((manifest, ctx) => {
+    if (manifest.composes) {
+      if (manifest.type !== 'recipe') {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['composes'],
+          message: '`composes` is only allowed on recipes (type: recipe)',
+        });
+      }
+      for (const key of Object.keys(manifest.composes)) {
+        if (!KEBAB_KEY_RE.test(key)) {
+          ctx.addIssue({
+            code: 'custom',
+            path: ['composes', key],
+            message: `composes key "${key}" must be kebab-case ([a-z0-9-], no leading/trailing dash)`,
+          });
+        }
+      }
+    }
+
     if (manifest.setup?.tasks) {
       const seenIds = new Map<string, number>();
       manifest.setup.tasks.forEach((task, idx) => {
