@@ -21,23 +21,30 @@ export type RenderRecipeResult = {
   outputPath: string;
   /** Per-child results keyed by composes-block key (declaration order). */
   children: Map<string, ChildRenderResult>;
+  /** Files emitted by the recipe's own template tree (orchestration files). */
+  recipe: RenderResult;
 };
 
 /**
- * Render every child of a resolved recipe into its own subdirectory of
- * `outputPath`. Default subdir is the composes-block key; the user can
- * override at prompt time by emitting a recipe-level prompt named
- * `<key>_dir` whose answer becomes the subdir (single segment or
- * multi-segment, but never escaping the recipe outputPath).
+ * Render a resolved recipe into `outputPath`. Children are rendered first,
+ * each into its own subdirectory of `outputPath`; then the recipe's own
+ * template tree is rendered into `outputPath` itself (orchestration files
+ * — root README, root package.json, docker-compose.yml, etc.).
+ *
+ * Default child subdir is the composes-block key; the user can override
+ * at prompt time by emitting a recipe-level prompt named `<key>_dir`
+ * whose answer becomes the subdir (single segment or multi-segment, but
+ * never escaping the recipe outputPath).
  *
  * Each child's manifest-level `include:` rules and `post_render` hooks
  * apply only to that child's subtree — they are forwarded to
  * `renderBundle` with the child's own outputPath, so any path the child
  * names is implicitly scoped to its subtree.
  *
- * Recipe root rendering (orchestration files at outputPath itself) is
- * NOT done here — that lands in M5.5 once recipe templates have a place
- * to live in the manifest layout.
+ * The recipe-root render runs AFTER every child so the recipe's templates
+ * can reference any child's answers. To prevent the recipe's own template
+ * tree from accidentally writing into a child's subtree, the walk over
+ * the recipe root skips paths that match a rendered child's subdir.
  *
  * The child render scope is `{ ...answers, ...answers[key] }`:
  *   - recipe-level keys flat at root (so child templates can reference
@@ -46,6 +53,10 @@ export type RenderRecipeResult = {
  *     child can read `{{ api.port }}`)
  *   - the child's own prompt answers flat at root (overriding any
  *     recipe-level keys with the same name)
+ *
+ * The recipe-root render uses `answers` verbatim, so the recipe's
+ * templates see recipe-level prompts at root and every child namespace
+ * at `answers.<key>.*`.
  */
 export async function renderRecipe(
   resolved: ResolvedRecipe,
@@ -75,7 +86,14 @@ export async function renderRecipe(
     childResults.set(key, { ...result, subdir, outputPath: childOut });
   }
 
-  return { outputPath: absOut, children: childResults };
+  const childSubdirIgnorePatterns = [...usedSubdirs.keys()].map((sub) => `${sub}/`);
+  const recipeResult = await renderBundle(resolved.recipeBundle, absOut, answers, {
+    ...opts,
+    skipWriteableCheck: true,
+    extraIgnorePatterns: [...(opts.extraIgnorePatterns ?? []), ...childSubdirIgnorePatterns],
+  });
+
+  return { outputPath: absOut, children: childResults, recipe: recipeResult };
 }
 
 function buildChildScope(answers: Answers, key: string): Answers {

@@ -17,6 +17,19 @@ export class RenderError extends Error {
 export type RenderOptions = {
   /** Overwrite a non-empty existing output directory. */
   force?: boolean;
+  /**
+   * Skip the empty-directory safety check on `outputPath`. Used by the
+   * recipe-root render — `renderRecipe` already validated the outer
+   * directory before children populated it, so the recipe's own
+   * `renderBundle` call must not re-check and reject it.
+   */
+  skipWriteableCheck?: boolean;
+  /**
+   * Extra gitignore-style patterns appended to `.hexignore`. The recipe
+   * render uses this to skip into child subdirs (so the recipe's own
+   * template tree can't accidentally rewrite child output).
+   */
+  extraIgnorePatterns?: string[];
 };
 
 const BINARY_SAMPLE_BYTES = 8192;
@@ -83,12 +96,16 @@ export async function renderBundle(
   opts: RenderOptions = {},
 ): Promise<RenderResult> {
   const absOut = isAbsolute(outputPath) ? outputPath : resolve(process.cwd(), outputPath);
-  await ensureWriteableTarget(absOut, opts.force ?? false);
+  if (!opts.skipWriteableCheck) {
+    await ensureWriteableTarget(absOut, opts.force ?? false);
+  }
 
   const includeRules = bundle.manifest.include ?? [];
   const written: string[] = [];
 
-  for await (const file of walkTemplate(bundle.rootPath)) {
+  for await (const file of walkTemplate(bundle.rootPath, {
+    extraIgnorePatterns: opts.extraIgnorePatterns,
+  })) {
     if (!shouldInclude(file.relativePath, includeRules, answers)) continue;
 
     const renderedRel = renderText(file.relativePath, answers).trim();

@@ -27,6 +27,17 @@ function toPosix(p: string): string {
   return sep === '/' ? p : p.split(sep).join('/');
 }
 
+export type WalkOptions = {
+  /**
+   * Extra gitignore-style patterns layered on top of `.hexignore`. Used by
+   * the recipe-root render to suppress walking into directories that
+   * children have already populated (passing `<child_subdir>/` keeps the
+   * recipe's own template tree from accidentally writing into a child's
+   * subtree).
+   */
+  extraIgnorePatterns?: string[];
+};
+
 /**
  * Walk a template root, yielding every file that should be considered
  * for rendering. Skips:
@@ -34,11 +45,18 @@ function toPosix(p: string): string {
  *   - the `.hex/` directory at the artifact root (Hex metadata)
  *   - the `.hexignore` file itself
  *   - any path matched by `.hexignore`
+ *   - any path matched by `extraIgnorePatterns` (programmatic exclusions)
  *
  * Symlinks are not followed.
  */
-export async function* walkTemplate(rootPath: string): AsyncGenerator<WalkedFile> {
+export async function* walkTemplate(
+  rootPath: string,
+  opts: WalkOptions = {},
+): AsyncGenerator<WalkedFile> {
   const ig = await loadHexignore(rootPath);
+  if (opts.extraIgnorePatterns && opts.extraIgnorePatterns.length > 0) {
+    ig.add(opts.extraIgnorePatterns.join('\n'));
+  }
 
   async function* walk(absDir: string): AsyncGenerator<WalkedFile> {
     const entries = await readdir(absDir, { withFileTypes: true });
