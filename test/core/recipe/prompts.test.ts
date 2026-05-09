@@ -381,3 +381,92 @@ describe('runRecipePrompts — degenerate cases', () => {
     expect(notes).toHaveLength(0);
   });
 });
+
+describe('runRecipePrompts — nested recipes', () => {
+  it('runs outer-recipe prompts, then nested-recipe prompts, then nested children — order + namespacing', async () => {
+    // outer (recipe) → inner (recipe) → leaf (component)
+    const outerRoot = join(work, 'outer');
+    const innerRoot = join(work, 'inner');
+    const leafRoot = join(work, 'leaf');
+    await writeManifest(outerRoot, {
+      type: 'recipe',
+      name: 'outer',
+      version: '0.1.0',
+      prompts: [{ project_name: { type: 'string', default: 'demo' } }],
+      composes: { inner: 'file:../inner' },
+    });
+    await writeManifest(innerRoot, {
+      type: 'recipe',
+      name: 'inner',
+      version: '0.1.0',
+      prompts: [{ inner_top: { type: 'string', default: 'inner-default' } }],
+      composes: { leaf: 'file:../leaf' },
+    });
+    await writeManifest(leafRoot, {
+      type: 'component',
+      name: 'leaf',
+      version: '0.1.0',
+      prompts: [{ leaf_prompt: { type: 'integer', default: 42 } }],
+    });
+
+    const bundle = await loadFromPath(outerRoot);
+    const resolved = await resolveRecipe(bundle, { config: { sources: [] } });
+    const { prompter, asks } = recordingPrompter([
+      { kind: 'text', value: 'my-app' }, // outer.project_name
+      { kind: 'text', value: 'innerval' }, // inner.inner_top
+      { kind: 'text', value: '99' }, // inner.leaf.leaf_prompt
+    ]);
+
+    const answers = await runRecipePrompts(resolved, prompter);
+
+    expect(asks.map((a) => a.message)).toEqual(['project_name', 'inner_top', 'leaf_prompt']);
+    expect(answers).toEqual({
+      project_name: 'my-app',
+      inner: {
+        inner_top: 'innerval',
+        leaf: { leaf_prompt: 99 },
+      },
+    });
+  });
+
+  it('a nested-leaf prompt can branch on an outer-recipe answer via when:', async () => {
+    const outerRoot = join(work, 'outer');
+    const innerRoot = join(work, 'inner');
+    const leafRoot = join(work, 'leaf');
+    await writeManifest(outerRoot, {
+      type: 'recipe',
+      name: 'outer',
+      version: '0.1.0',
+      prompts: [{ containerize: { type: 'boolean', default: true } }],
+      composes: { inner: 'file:../inner' },
+    });
+    await writeManifest(innerRoot, {
+      type: 'recipe',
+      name: 'inner',
+      version: '0.1.0',
+      composes: { leaf: 'file:../leaf' },
+    });
+    await writeManifest(leafRoot, {
+      type: 'component',
+      name: 'leaf',
+      version: '0.1.0',
+      prompts: [
+        // gated by the outermost recipe-level answer
+        { image_tag: { type: 'string', default: 'latest', when: 'containerize' } },
+      ],
+    });
+
+    const bundle = await loadFromPath(outerRoot);
+    const resolved = await resolveRecipe(bundle, { config: { sources: [] } });
+    const { prompter, asks } = recordingPrompter([
+      { kind: 'confirm', value: false }, // containerize=false → leaf prompt skipped
+    ]);
+
+    const answers = await runRecipePrompts(resolved, prompter);
+    expect(asks.map((a) => a.message)).toEqual(['containerize']);
+    expect(answers).toEqual({
+      containerize: false,
+      inner: { leaf: {} },
+    });
+  });
+});
