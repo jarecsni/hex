@@ -278,6 +278,189 @@ version: 0.1.0
   });
 });
 
+describe('renderRecipe — recipe root rendering', () => {
+  it('renders the recipe bundle into outputPath after children, with child answers in scope', async () => {
+    const recipeRoot = join(work, 'recipe');
+    const apiRoot = join(work, 'children', 'api');
+    const uiRoot = join(work, 'children', 'ui');
+    await writeManifest(
+      recipeRoot,
+      `type: recipe
+name: demo
+version: 0.1.0
+composes:
+  api: file:../children/api
+  ui: file:../children/ui
+`,
+    );
+    // Recipe owns the root-level orchestration files.
+    await writeFileEnsure(
+      join(recipeRoot, 'package.json'),
+      '{ "name": "{{ project_name }}", "workspaces": ["{{ api_dir | default("api") }}"] }',
+    );
+    await writeFileEnsure(
+      join(recipeRoot, 'docker-compose.yml'),
+      'services:\n  api:\n    ports: ["{{ api.port }}:{{ api.port }}"]',
+    );
+    await writeManifest(
+      apiRoot,
+      `type: component
+name: api
+version: 0.1.0
+`,
+    );
+    await writeFileEnsure(join(apiRoot, 'server.ts'), '// api');
+    await writeManifest(
+      uiRoot,
+      `type: component
+name: ui
+version: 0.1.0
+`,
+    );
+    await writeFileEnsure(join(uiRoot, 'app.tsx'), '// ui');
+
+    const resolved = await loadResolved(recipeRoot);
+    const out = join(work, 'out');
+    const result = await renderRecipe(resolved, out, {
+      project_name: 'my-app',
+      api: { port: 4000 },
+      ui: { framework: 'react' },
+    });
+
+    expect(result.recipe.written.sort()).toEqual(['docker-compose.yml', 'package.json']);
+    expect(await readFile(join(out, 'package.json'), 'utf8')).toBe(
+      '{ "name": "my-app", "workspaces": ["api"] }',
+    );
+    expect(await readFile(join(out, 'docker-compose.yml'), 'utf8')).toBe(
+      'services:\n  api:\n    ports: ["4000:4000"]',
+    );
+    // Children still rendered into their subdirs.
+    expect(await readFile(join(out, 'api', 'server.ts'), 'utf8')).toBe('// api');
+    expect(await readFile(join(out, 'ui', 'app.tsx'), 'utf8')).toBe('// ui');
+  });
+
+  it("a recipe template under a child's subdir is skipped (collision protection)", async () => {
+    const recipeRoot = join(work, 'recipe');
+    const apiRoot = join(work, 'children', 'api');
+    await writeManifest(
+      recipeRoot,
+      `type: recipe
+name: demo
+version: 0.1.0
+composes:
+  api: file:../children/api
+`,
+    );
+    // Recipe template tree contains an `api/` directory. The api child also
+    // renders into `<out>/api/`. The recipe walk should skip its own `api/`
+    // tree to keep from clobbering the child's output.
+    await writeFileEnsure(join(recipeRoot, 'README.md'), '# {{ project_name }}');
+    await writeFileEnsure(join(recipeRoot, 'api', 'leaked.ts'), 'should NOT be emitted');
+    await writeManifest(
+      apiRoot,
+      `type: component
+name: api
+version: 0.1.0
+`,
+    );
+    await writeFileEnsure(join(apiRoot, 'real.ts'), 'child file');
+
+    const resolved = await loadResolved(recipeRoot);
+    const out = join(work, 'out');
+    const result = await renderRecipe(resolved, out, { project_name: 'demo' });
+
+    expect(result.recipe.written).toEqual(['README.md']);
+    expect(existsSync(join(out, 'api', 'leaked.ts'))).toBe(false);
+    expect(await readFile(join(out, 'api', 'real.ts'), 'utf8')).toBe('child file');
+  });
+
+  it("a recipe-root file gated by a child's presence renders or is skipped via include rules", async () => {
+    const recipeRoot = join(work, 'recipe');
+    const apiRoot = join(work, 'children', 'api');
+    await writeManifest(
+      recipeRoot,
+      `type: recipe
+name: demo
+version: 0.1.0
+composes:
+  api: file:../children/api
+include:
+  - { path: docker-compose.yml, when: 'api.containerize' }
+`,
+    );
+    await writeFileEnsure(join(recipeRoot, 'README.md'), '# {{ project_name }}');
+    await writeFileEnsure(join(recipeRoot, 'docker-compose.yml'), 'services: { api: {} }');
+    await writeManifest(
+      apiRoot,
+      `type: component
+name: api
+version: 0.1.0
+`,
+    );
+
+    const resolved = await loadResolved(recipeRoot);
+    const out = join(work, 'out');
+
+    // Case 1: child says don't containerize → recipe-root docker-compose.yml is filtered out.
+    const result1 = await renderRecipe(resolved, out, {
+      project_name: 'demo',
+      api: { containerize: false },
+    });
+    expect(result1.recipe.written.sort()).toEqual(['README.md']);
+    expect(existsSync(join(out, 'docker-compose.yml'))).toBe(false);
+
+    // Case 2: containerize true → docker-compose.yml is emitted. Use --force to overwrite.
+    await rm(out, { recursive: true, force: true });
+    const result2 = await renderRecipe(
+      resolved,
+      out,
+      { project_name: 'demo', api: { containerize: true } },
+      { force: true },
+    );
+    expect(result2.recipe.written.sort()).toEqual(['README.md', 'docker-compose.yml'].sort());
+    expect(existsSync(join(out, 'docker-compose.yml'))).toBe(true);
+  });
+
+  it("recipe-root render runs after children — child output is observable when the recipe's hook fires", async () => {
+    // Recipe declares a delete hook against api/scratch.txt. The api child
+    // wrote that file. If the recipe ran BEFORE the child, the hook would
+    // fail (target not found). Test passes ⇒ recipe ran after.
+    const recipeRoot = join(work, 'recipe');
+    const apiRoot = join(work, 'children', 'api');
+    await writeManifest(
+      recipeRoot,
+      `type: recipe
+name: demo
+version: 0.1.0
+composes:
+  api: file:../children/api
+hooks:
+  post_render:
+    - delete:
+        path: api/scratch.txt
+`,
+    );
+    await writeFileEnsure(join(recipeRoot, 'README.md'), '# demo');
+    await writeManifest(
+      apiRoot,
+      `type: component
+name: api
+version: 0.1.0
+`,
+    );
+    await writeFileEnsure(join(apiRoot, 'scratch.txt'), 'temp');
+    await writeFileEnsure(join(apiRoot, 'real.ts'), 'kept');
+
+    const resolved = await loadResolved(recipeRoot);
+    const out = join(work, 'out');
+    const result = await renderRecipe(resolved, out, {});
+
+    expect(result.recipe.deleted).toEqual(['api/scratch.txt']);
+    expect(existsSync(join(out, 'api', 'scratch.txt'))).toBe(false);
+    expect(await readFile(join(out, 'api', 'real.ts'), 'utf8')).toBe('kept');
+  });
+});
+
 describe('renderRecipe — hook & include scoping', () => {
   it("a child's post_render delete hook only touches its own subtree", async () => {
     const recipeRoot = join(work, 'recipe');
