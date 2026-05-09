@@ -14,6 +14,13 @@ export type ChildRenderResult = RenderResult & {
   subdir: string;
   /** Absolute path of the child's render target. */
   outputPath: string;
+  /**
+   * When the child is itself a recipe, the full nested render result.
+   * The flat `written/renamed/deleted` fields are aliased to the nested
+   * recipe-root's own RenderResult (matching how component children
+   * surface their immediate render output).
+   */
+  nestedRecipe?: RenderRecipeResult;
 };
 
 export type RenderRecipeResult = {
@@ -82,6 +89,22 @@ export async function renderRecipe(
 
     const childOut = resolve(absOut, subdir);
     const childScope = buildChildScope(answers, key);
+
+    if (child.resolved) {
+      // Recipe child — recursively render the nested recipe tree into the
+      // child's subdir. The nested recipe's own children + recipe root all
+      // land within childOut. Surface nested basics on the flat fields and
+      // the full tree on `nestedRecipe`.
+      const nested = await renderRecipe(child.resolved, childOut, childScope, opts);
+      childResults.set(key, {
+        ...nested.recipe,
+        subdir,
+        outputPath: childOut,
+        nestedRecipe: nested,
+      });
+      continue;
+    }
+
     const result = await renderBundle(child.bundle, childOut, childScope, opts);
     childResults.set(key, { ...result, subdir, outputPath: childOut });
   }

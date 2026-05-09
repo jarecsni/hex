@@ -21,8 +21,14 @@ export type ChildResolution = {
   key: string;
   /** Original parsed reference from the recipe manifest. */
   ref: ChildRef;
-  /** Loaded child component bundle. */
+  /** Loaded child bundle (component or recipe). */
   bundle: ComponentBundle;
+  /**
+   * When the child is itself a recipe, the recursively-resolved tree.
+   * Absent for components. Tree-shaped — graph cycles are rejected at
+   * resolution time.
+   */
+  resolved?: ResolvedRecipe;
 };
 
 export type ResolvedRecipe = {
@@ -43,11 +49,18 @@ export type ResolveRecipeOpts = {
 
 /**
  * Walk a recipe's `composes:` block and resolve every child to a loaded
- * `ComponentBundle`. Discovery (for bare-name children) is invoked at most
- * once and is skipped entirely if no child is a bare-name reference.
+ * bundle. When a child is itself a recipe, recursively resolve its
+ * composes — assembly is **tree-shaped**, never a graph: if a recipe
+ * directly or transitively composes itself, resolution rejects with a
+ * `RecipeResolutionError` whose message names the cycle chain.
  *
- * Failure to resolve any child throws a `RecipeResolutionError` naming the
- * failing key. Children are resolved sequentially in declaration order.
+ * Discovery (for bare-name children) is invoked lazily, at most once
+ * across the whole recursive walk; nested levels reuse the same
+ * discovered template list.
+ *
+ * Failure to resolve any child throws a `RecipeResolutionError` naming
+ * the failing key. Children are resolved sequentially in declaration
+ * order, depth-first.
  */
 export async function resolveRecipe(
   recipeBundle: ComponentBundle,
@@ -58,38 +71,68 @@ export async function resolveRecipe(
       `resolveRecipe called on a ${recipeBundle.manifest.type} bundle (${recipeBundle.manifest.name})`,
     );
   }
+  const ctx: ResolveCtx = { opts, discovered: null, pathStack: [] };
+  return resolveRecipeRec(recipeBundle, '<root>', ctx);
+}
 
+type ResolveCtx = {
+  opts: ResolveRecipeOpts;
+  discovered: TemplateEntry[] | null;
+  pathStack: Array<{ key: string; rootPath: string }>;
+};
+
+async function resolveRecipeRec(
+  recipeBundle: ComponentBundle,
+  enteringKey: string,
+  ctx: ResolveCtx,
+): Promise<ResolvedRecipe> {
   const composes = recipeBundle.manifest.composes;
   if (!composes || Object.keys(composes).length === 0) {
     return { recipeBundle, children: new Map() };
   }
 
-  const needsDiscovery = Object.values(composes).some((c) => c.kind === 'name');
-  let discovered: TemplateEntry[] | null = null;
-  if (needsDiscovery) {
-    const result = await discoverTemplates(opts.config, { cacheDir: opts.cacheDir });
-    discovered = result.templates;
-    if (opts.warnings) opts.warnings.push(...result.warnings);
+  // Lazy discovery — at most once across the whole recursive walk. Re-evaluate
+  // at each level so a deep bare-name ref still triggers discovery if no
+  // shallower level needed it.
+  if (ctx.discovered === null && Object.values(composes).some((c) => c.kind === 'name')) {
+    const result = await discoverTemplates(ctx.opts.config, { cacheDir: ctx.opts.cacheDir });
+    ctx.discovered = result.templates;
+    if (ctx.opts.warnings) ctx.opts.warnings.push(...result.warnings);
   }
 
-  const children = new Map<string, ChildResolution>();
-  for (const [key, ref] of Object.entries(composes)) {
-    let bundle: ComponentBundle;
-    try {
-      bundle = await loadChild(ref, recipeBundle, discovered, opts);
-    } catch (err) {
-      const cause = err instanceof Error ? err : undefined;
-      const detail = err instanceof Error ? err.message : String(err);
-      throw new RecipeResolutionError(
-        `failed to resolve child "${key}" (${describeRef(ref)}): ${detail}`,
-        key,
-        cause,
-      );
+  ctx.pathStack.push({ key: enteringKey, rootPath: recipeBundle.rootPath });
+  try {
+    const children = new Map<string, ChildResolution>();
+    for (const [key, ref] of Object.entries(composes)) {
+      let bundle: ComponentBundle;
+      try {
+        bundle = await loadChild(ref, recipeBundle, ctx.discovered, ctx.opts);
+      } catch (err) {
+        const cause = err instanceof Error ? err : undefined;
+        const detail = err instanceof Error ? err.message : String(err);
+        throw new RecipeResolutionError(
+          `failed to resolve child "${key}" (${describeRef(ref)}): ${detail}`,
+          key,
+          cause,
+        );
+      }
+
+      let resolved: ResolvedRecipe | undefined;
+      if (bundle.manifest.type === 'recipe') {
+        const cycleAt = ctx.pathStack.findIndex((p) => p.rootPath === bundle.rootPath);
+        if (cycleAt !== -1) {
+          const chain = [...ctx.pathStack.slice(cycleAt).map((p) => p.key), key].join(' → ');
+          throw new RecipeResolutionError(`cycle detected in recipe composes graph: ${chain}`, key);
+        }
+        resolved = await resolveRecipeRec(bundle, key, ctx);
+      }
+
+      children.set(key, { key, ref, bundle, resolved });
     }
-    children.set(key, { key, ref, bundle });
+    return { recipeBundle, children };
+  } finally {
+    ctx.pathStack.pop();
   }
-
-  return { recipeBundle, children };
 }
 
 async function loadChild(

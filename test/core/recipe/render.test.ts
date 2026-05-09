@@ -558,3 +558,101 @@ version: 0.1.0
     expect(await readFile(join(out, 'ui', 'Dockerfile'), 'utf8')).toBe('ui docker');
   });
 });
+
+describe('renderRecipe — nested recipes', () => {
+  it('renders a 2-level recipe (outer → inner-recipe → leaf) into nested subdirs', async () => {
+    const outerRoot = join(work, 'outer');
+    const innerRoot = join(work, 'inner');
+    const leafRoot = join(work, 'leaf');
+    await writeManifest(
+      outerRoot,
+      `type: recipe
+name: outer
+version: 0.1.0
+composes:
+  inner: file:../inner
+`,
+    );
+    await writeFileEnsure(join(outerRoot, 'README.md'), 'outer readme: {{ project_name }}');
+    await writeManifest(
+      innerRoot,
+      `type: recipe
+name: inner
+version: 0.1.0
+composes:
+  leaf: file:../leaf
+`,
+    );
+    await writeFileEnsure(join(innerRoot, 'inner.txt'), 'inner says hi');
+    await writeManifest(
+      leafRoot,
+      `type: component
+name: leaf
+version: 0.1.0
+`,
+    );
+    await writeFileEnsure(join(leafRoot, 'leaf.ts'), 'leaf with {{ flavour }}');
+
+    const resolved = await loadResolved(outerRoot);
+    const out = join(work, 'out');
+    const result = await renderRecipe(resolved, out, {
+      project_name: 'demo',
+      inner: { leaf: { flavour: 'vanilla' } },
+    });
+
+    // outer recipe-root output
+    expect(await readFile(join(out, 'README.md'), 'utf8')).toBe('outer readme: demo');
+    // inner recipe rendered into <out>/inner/
+    expect(await readFile(join(out, 'inner', 'inner.txt'), 'utf8')).toBe('inner says hi');
+    // leaf component rendered into <out>/inner/leaf/
+    expect(await readFile(join(out, 'inner', 'leaf', 'leaf.ts'), 'utf8')).toBe('leaf with vanilla');
+
+    // result shape: outer.children.inner.nestedRecipe surfaces inner's tree
+    const innerChild = result.children.get('inner');
+    expect(innerChild?.subdir).toBe('inner');
+    expect(innerChild?.nestedRecipe).toBeDefined();
+    const leafChild = innerChild?.nestedRecipe?.children.get('leaf');
+    expect(leafChild?.subdir).toBe('leaf');
+  });
+
+  it("an outer recipe-root template can reference a nested-leaf's answer via answers.<inner>.<leaf>.<prompt>", async () => {
+    const outerRoot = join(work, 'outer');
+    const innerRoot = join(work, 'inner');
+    const leafRoot = join(work, 'leaf');
+    await writeManifest(
+      outerRoot,
+      `type: recipe
+name: outer
+version: 0.1.0
+composes:
+  inner: file:../inner
+`,
+    );
+    // outer root README pulls leaf's port out of two levels of nesting
+    await writeFileEnsure(join(outerRoot, 'README.md'), 'inner-leaf port = {{ inner.leaf.port }}');
+    await writeManifest(
+      innerRoot,
+      `type: recipe
+name: inner
+version: 0.1.0
+composes:
+  leaf: file:../leaf
+`,
+    );
+    await writeManifest(
+      leafRoot,
+      `type: component
+name: leaf
+version: 0.1.0
+`,
+    );
+    await writeFileEnsure(join(leafRoot, 'config.ts'), 'port {{ port }}');
+
+    const resolved = await loadResolved(outerRoot);
+    const out = join(work, 'out');
+    await renderRecipe(resolved, out, { inner: { leaf: { port: 8080 } } });
+
+    expect(await readFile(join(out, 'README.md'), 'utf8')).toBe('inner-leaf port = 8080');
+    expect(await readFile(join(out, 'inner', 'leaf', 'config.ts'), 'utf8')).toBe('port 8080');
+  });
+});

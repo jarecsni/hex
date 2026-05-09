@@ -309,3 +309,117 @@ describe('resolveRecipe — error handling', () => {
     expect(result.children.get('local')?.bundle.manifest.name).toBe('local-child');
   });
 });
+
+describe('resolveRecipe — recursive (recipe composing recipes)', () => {
+  it('recursively resolves a 2-level recipe (outer → inner-recipe → leaf)', async () => {
+    const outerRoot = join(work, 'outer');
+    const innerRoot = join(work, 'inner');
+    const leafRoot = join(work, 'leaf');
+    await writeManifest(outerRoot, {
+      type: 'recipe',
+      name: 'outer',
+      version: '0.1.0',
+      composes: { inner: 'file:../inner' },
+    });
+    await writeManifest(innerRoot, {
+      type: 'recipe',
+      name: 'inner',
+      version: '0.1.0',
+      composes: { leaf: 'file:../leaf' },
+    });
+    await writeManifest(leafRoot, {
+      type: 'component',
+      name: 'leaf',
+      version: '0.1.0',
+    });
+
+    const bundle = await loadFromPath(outerRoot);
+    const result = await resolveRecipe(bundle, { config: { sources: [] } });
+
+    const innerChild = result.children.get('inner');
+    expect(innerChild?.bundle.manifest.name).toBe('inner');
+    expect(innerChild?.resolved).toBeDefined();
+
+    const leafChild = innerChild?.resolved?.children.get('leaf');
+    expect(leafChild?.bundle.manifest.name).toBe('leaf');
+    expect(leafChild?.resolved).toBeUndefined(); // it's a component
+  });
+
+  it('rejects a direct cycle (recipe references itself)', async () => {
+    const recipeRoot = join(work, 'recipe');
+    await writeManifest(recipeRoot, {
+      type: 'recipe',
+      name: 'self',
+      version: '0.1.0',
+      composes: { me: 'file:.' },
+    });
+
+    const bundle = await loadFromPath(recipeRoot);
+    await expect(resolveRecipe(bundle, { config: { sources: [] } })).rejects.toMatchObject({
+      name: 'RecipeResolutionError',
+      key: 'me',
+    });
+    await expect(resolveRecipe(bundle, { config: { sources: [] } })).rejects.toThrow(/cycle/);
+  });
+
+  it('rejects an indirect cycle (A → B → A)', async () => {
+    const aRoot = join(work, 'a');
+    const bRoot = join(work, 'b');
+    await writeManifest(aRoot, {
+      type: 'recipe',
+      name: 'a',
+      version: '0.1.0',
+      composes: { b: 'file:../b' },
+    });
+    await writeManifest(bRoot, {
+      type: 'recipe',
+      name: 'b',
+      version: '0.1.0',
+      composes: { a: 'file:../a' },
+    });
+
+    const bundle = await loadFromPath(aRoot);
+    await expect(resolveRecipe(bundle, { config: { sources: [] } })).rejects.toMatchObject({
+      name: 'RecipeResolutionError',
+      key: 'a',
+    });
+    await expect(resolveRecipe(bundle, { config: { sources: [] } })).rejects.toThrow(
+      /cycle.*<root>.*→.*b.*→.*a/,
+    );
+  });
+
+  it('allows the same recipe under two different keys (still tree-shaped)', async () => {
+    // outer composes inner under two keys; inner is a leaf-component recipe
+    // (composes nothing). Path-stack-based cycle detection should NOT
+    // false-positive — siblings sharing identity is a tree, not a cycle.
+    const outerRoot = join(work, 'outer');
+    const innerRoot = join(work, 'inner');
+    const leafRoot = join(work, 'leaf');
+    await writeManifest(outerRoot, {
+      type: 'recipe',
+      name: 'outer',
+      version: '0.1.0',
+      composes: { first: 'file:../inner', second: 'file:../inner' },
+    });
+    await writeManifest(innerRoot, {
+      type: 'recipe',
+      name: 'inner',
+      version: '0.1.0',
+      composes: { leaf: 'file:../leaf' },
+    });
+    await writeManifest(leafRoot, {
+      type: 'component',
+      name: 'leaf',
+      version: '0.1.0',
+    });
+
+    const bundle = await loadFromPath(outerRoot);
+    const result = await resolveRecipe(bundle, { config: { sources: [] } });
+    expect(result.children.get('first')?.resolved?.children.get('leaf')?.bundle.manifest.name).toBe(
+      'leaf',
+    );
+    expect(
+      result.children.get('second')?.resolved?.children.get('leaf')?.bundle.manifest.name,
+    ).toBe('leaf');
+  });
+});

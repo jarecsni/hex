@@ -49,6 +49,22 @@ export async function runRecipePrompts(
   }
 
   for (const [key, child] of resolved.children) {
+    if (child.resolved) {
+      // Recipe child — recursively run the nested recipe's prompts. The
+      // nested recipe sees outer scope (recipe-level + completed siblings)
+      // at root via the initial answers. Extract the nested recipe's own
+      // contributions (everything new vs. the snapshot) into answers[key].
+      prompter.note?.('', `Configuring "${key}"`);
+      const inheritedKeys = new Set(Object.keys(answers));
+      const nestedContext = await runRecipePrompts(child.resolved, prompter, { ...answers });
+      const nestedContributions: Answers = {};
+      for (const k of Object.keys(nestedContext)) {
+        if (!inheritedKeys.has(k)) nestedContributions[k] = nestedContext[k];
+      }
+      answers[key] = nestedContributions;
+      continue;
+    }
+
     const childManifest = child.bundle.manifest;
     const childPrompts = childManifest.prompts ?? [];
 
