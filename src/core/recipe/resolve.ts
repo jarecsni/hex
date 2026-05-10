@@ -4,6 +4,7 @@ import { type TemplateEntry, discoverTemplates } from '../discovery/index.js';
 import type { ChildRef } from '../manifest/types.js';
 import { type ComponentBundle, loadFromPath } from '../sources/file-source.js';
 import { resolveGitSource } from '../sources/git-source.js';
+import { validateContracts } from './contracts.js';
 
 export class RecipeResolutionError extends Error {
   constructor(
@@ -72,7 +73,9 @@ export async function resolveRecipe(
     );
   }
   const ctx: ResolveCtx = { opts, discovered: null, pathStack: [] };
-  return resolveRecipeRec(recipeBundle, '<root>', ctx);
+  const result = await resolveRecipeRec(recipeBundle, '<root>', ctx);
+  validateContracts(result);
+  return result;
 }
 
 type ResolveCtx = {
