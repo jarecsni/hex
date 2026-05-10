@@ -1,0 +1,16 @@
+type: component
+name: api-express
+version: 0.1.0
+kind: api
+
+prompts:
+  - port:
+      type: integer
+      default: 3000
+      description: HTTP listen port
+
+# Map form: each symbol becomes a sibling-visible value. Sibling components
+# (or the recipe root) can read these as `{{ provided.HTTP_PORT }}`.
+provides:
+  HTTP_PORT: "{{ port }}"
+  API_FRAMEWORK: "express"

@@ -1,0 +1,17 @@
+type: component
+name: api-fastify
+version: 0.1.0
+kind: api
+
+prompts:
+  - port:
+      type: integer
+      default: 3000
+      description: HTTP listen port
+
+# Same provides shape as api-express — that's what makes them
+# interchangeable in the recipe. A consumer reads `provided.HTTP_PORT`
+# and doesn't need to know which framework filled the slot.
+provides:
+  HTTP_PORT: "{{ port }}"
+  API_FRAMEWORK: "fastify"
