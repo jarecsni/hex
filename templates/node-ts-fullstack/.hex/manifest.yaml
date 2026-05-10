@@ -1,0 +1,28 @@
+type: recipe
+name: node-ts-fullstack
+version: 0.1.0
+
+# Recipe-level prompts run once before any child's prompts.
+prompts:
+  - app_name:
+      type: string
+      required: true
+      description: Application name (project root, README title)
+      pattern: '^[a-z][a-z0-9-]*$'
+
+# Slot-based composition (M6.3). The `api` child is filled by any component
+# in the configured source roots that declares `kind: api` and matches the
+# version spec. Swapping api-express for api-fastify is a one-line edit
+# elsewhere — or just a different source-root layout — with no recipe change.
+composes:
+  api: { kind: api, version: ^0.1.0 }
+
+setup:
+  message: |
+    Fullstack scaffold ready. The api/ subtree was filled by whichever
+    `kind: api` component your source root resolved to.
+  tasks:
+    - id: install-deps
+      title: Install dependencies
+      detail: |
+        cd into the api/ subdirectory and run `npm install`.
