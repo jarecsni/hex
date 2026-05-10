@@ -82,7 +82,7 @@ function buildProvidesIndex(peers: ChildResolution[]): Map<string, Set<string>> 
   for (const peer of peers) {
     const m = peer.bundle.manifest;
     if (m.type !== 'component' || !m.provides) continue;
-    for (const symbol of m.provides) {
+    for (const symbol of providesSymbols(m.provides)) {
       let set = index.get(symbol);
       if (!set) {
         set = new Set();
@@ -92,6 +92,11 @@ function buildProvidesIndex(peers: ChildResolution[]): Map<string, Set<string>> 
     }
   }
   return index;
+}
+
+/** Iterable of symbol names regardless of whether `provides` is array or map form. */
+export function providesSymbols(p: string[] | Record<string, string>): string[] {
+  return Array.isArray(p) ? p : Object.keys(p);
 }
 
 function checkRequirement(

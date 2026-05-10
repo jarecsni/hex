@@ -270,7 +270,12 @@ export const composesSchema = z.record(z.string(), composesEntrySchema);
 //   provides — non-empty strings (env vars, generated symbols, file-layout promises)
 //   consumes — non-empty strings the component needs bound from siblings
 //   requires — peer-presence assertions, either by kind or by name+version
-export const providesSchema = z.array(z.string().min(1));
+// Array form is the M6.1 declaration shape; record form (M6.4) maps each
+// symbol to a Nunjucks expression evaluated at render time.
+export const providesSchema = z.union([
+  z.array(z.string().min(1)),
+  z.record(z.string().min(1), z.string()),
+]);
 export const consumesSchema = z.array(z.string().min(1));
 
 // `.strict()` on each variant ensures a mixed object (e.g. `{kind, name, version}`)

@@ -656,3 +656,185 @@ version: 0.1.0
     expect(await readFile(join(out, 'inner', 'leaf', 'config.ts'), 'utf8')).toBe('port 8080');
   });
 });
+
+describe('renderRecipe — provides / consumes wiring (M6.4)', () => {
+  it('exposes a sibling-provided value to a consuming child via `provided.*`', async () => {
+    const recipeRoot = join(work, 'recipe');
+    const dbRoot = join(work, 'children', 'db');
+    const apiRoot = join(work, 'children', 'api');
+    await writeManifest(
+      recipeRoot,
+      `type: recipe
+name: demo
+version: 0.1.0
+composes:
+  db: file:../children/db
+  api: file:../children/api
+`,
+    );
+    await writeManifest(
+      dbRoot,
+      `type: component
+name: pg
+version: 0.1.0
+kind: db
+provides:
+  DB_URL: "postgres://{{ host }}:{{ port }}/{{ database }}"
+`,
+    );
+    await writeManifest(
+      apiRoot,
+      `type: component
+name: api
+version: 0.1.0
+kind: api
+consumes:
+  - DB_URL
+`,
+    );
+    await writeFileEnsure(join(apiRoot, '.env.template'), 'DATABASE_URL={{ provided.DB_URL }}');
+
+    const resolved = await loadResolved(recipeRoot);
+    const out = join(work, 'out');
+    await renderRecipe(resolved, out, {
+      db: { host: 'pg.local', port: 5432, database: 'app' },
+    });
+
+    expect(await readFile(join(out, 'api', '.env.template'), 'utf8')).toBe(
+      'DATABASE_URL=postgres://pg.local:5432/app',
+    );
+  });
+
+  it('makes `provided.*` available to the recipe-root render too', async () => {
+    const recipeRoot = join(work, 'recipe');
+    const dbRoot = join(work, 'children', 'db');
+    await writeManifest(
+      recipeRoot,
+      `type: recipe
+name: demo
+version: 0.1.0
+composes:
+  db: file:../children/db
+`,
+    );
+    await writeManifest(
+      dbRoot,
+      `type: component
+name: pg
+version: 0.1.0
+kind: db
+provides:
+  DB_URL: "postgres://{{ host }}:{{ port }}/{{ database }}"
+`,
+    );
+    await writeFileEnsure(join(recipeRoot, 'docker-compose.yml'), 'url: {{ provided.DB_URL }}');
+
+    const resolved = await loadResolved(recipeRoot);
+    const out = join(work, 'out');
+    await renderRecipe(resolved, out, {
+      db: { host: 'pg.local', port: 5432, database: 'app' },
+    });
+
+    expect(await readFile(join(out, 'docker-compose.yml'), 'utf8')).toBe(
+      'url: postgres://pg.local:5432/app',
+    );
+  });
+
+  it('treats array-form `provides` as bare declarations (empty string under `provided.*`)', async () => {
+    const recipeRoot = join(work, 'recipe');
+    const dbRoot = join(work, 'children', 'db');
+    const apiRoot = join(work, 'children', 'api');
+    await writeManifest(
+      recipeRoot,
+      `type: recipe
+name: demo
+version: 0.1.0
+composes:
+  db: file:../children/db
+  api: file:../children/api
+`,
+    );
+    await writeManifest(
+      dbRoot,
+      `type: component
+name: pg
+version: 0.1.0
+kind: db
+provides:
+  - DB_URL
+`,
+    );
+    await writeManifest(
+      apiRoot,
+      `type: component
+name: api
+version: 0.1.0
+kind: api
+consumes:
+  - DB_URL
+`,
+    );
+    await writeFileEnsure(join(apiRoot, '.env.template'), 'URL=[{{ provided.DB_URL }}]');
+
+    const resolved = await loadResolved(recipeRoot);
+    const out = join(work, 'out');
+    await renderRecipe(resolved, out, {});
+
+    expect(await readFile(join(out, 'api', '.env.template'), 'utf8')).toBe('URL=[]');
+  });
+
+  it('does not leak `provided` across recipe boundaries', async () => {
+    // Outer recipe has a db component providing DB_URL. Inner recipe (a
+    // sibling) has its own api child consuming DB_URL. The inner-level
+    // `provided` map is built from inner siblings only, so DB_URL is not
+    // visible inside the inner recipe — the api template renders empty.
+    const outerRoot = join(work, 'outer');
+    const dbRoot = join(work, 'db');
+    const innerRoot = join(work, 'inner');
+    const apiRoot = join(work, 'inner-api');
+    await writeManifest(
+      outerRoot,
+      `type: recipe
+name: outer
+version: 0.1.0
+composes:
+  db: file:../db
+  inner: file:../inner
+`,
+    );
+    await writeManifest(
+      dbRoot,
+      `type: component
+name: pg
+version: 0.1.0
+kind: db
+provides:
+  DB_URL: "postgres://localhost"
+`,
+    );
+    await writeManifest(
+      innerRoot,
+      `type: recipe
+name: inner
+version: 0.1.0
+composes:
+  api: file:../inner-api
+`,
+    );
+    await writeManifest(
+      apiRoot,
+      `type: component
+name: api
+version: 0.1.0
+kind: api
+`,
+    );
+    await writeFileEnsure(join(apiRoot, '.env.template'), 'URL=[{{ provided.DB_URL }}]');
+
+    const resolved = await loadResolved(outerRoot);
+    const out = join(work, 'out');
+    await renderRecipe(resolved, out, {});
+
+    expect(await readFile(join(out, 'inner', 'api', '.env.template'), 'utf8')).toBe('URL=[]');
+  });
+});
