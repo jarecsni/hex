@@ -119,6 +119,15 @@ export type RequireByKind = { kind: string };
 export type RequireByNameVersion = { name: string; version: string };
 export type Requirement = RequireByKind | RequireByNameVersion;
 
+/**
+ * `provides` has two surface forms (parser preserves both):
+ *   - `string[]` — bare declarations (no value produced; M6.1 baseline)
+ *   - `Record<string, string>` — symbol → Nunjucks expression evaluated in
+ *     the child's own answer scope at render time, made available to
+ *     siblings under `provided.<symbol>`.
+ */
+export type Provides = string[] | Record<string, string>;
+
 export type Manifest = {
   type: 'component' | 'recipe';
   name: string;
@@ -130,7 +139,7 @@ export type Manifest = {
   include?: IncludeRule[];
   setup?: Setup;
   composes?: Composes;
-  provides?: string[];
+  provides?: Provides;
   consumes?: string[];
   requires?: Requirement[];
 };

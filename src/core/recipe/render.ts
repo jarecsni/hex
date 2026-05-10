@@ -7,6 +7,7 @@ import {
   ensureWriteableTarget,
   renderBundle,
 } from '../render/engine.js';
+import { renderText } from '../render/templating.js';
 import type { ResolvedRecipe } from './resolve.js';
 
 export type ChildRenderResult = RenderResult & {
@@ -77,8 +78,16 @@ export async function renderRecipe(
   const childResults = new Map<string, ChildRenderResult>();
   const usedSubdirs = new Map<string, string>();
 
+  // M6.4: pre-pass — evaluate every component child's `provides` map (when it
+  // is the symbol→expression form) in that child's own scope, building a flat
+  // `provided` map made available to ALL siblings (and the recipe root) under
+  // `provided.<symbol>`. Provides expressions intentionally do NOT see other
+  // children's `provided` — keeps the resolution order single-pass.
+  const provided = collectProvided(resolved, answers);
+  const answersWithProvided: Answers = { ...answers, provided };
+
   for (const [key, child] of resolved.children) {
-    const subdir = resolveChildSubdir(key, answers);
+    const subdir = resolveChildSubdir(key, answersWithProvided);
     const previousKey = usedSubdirs.get(subdir);
     if (previousKey !== undefined) {
       throw new RenderError(
@@ -88,7 +97,7 @@ export async function renderRecipe(
     usedSubdirs.set(subdir, key);
 
     const childOut = resolve(absOut, subdir);
-    const childScope = buildChildScope(answers, key);
+    const childScope = buildChildScope(answersWithProvided, key);
 
     if (child.resolved) {
       // Recipe child — recursively render the nested recipe tree into the
@@ -110,13 +119,45 @@ export async function renderRecipe(
   }
 
   const childSubdirIgnorePatterns = [...usedSubdirs.keys()].map((sub) => `${sub}/`);
-  const recipeResult = await renderBundle(resolved.recipeBundle, absOut, answers, {
+  const recipeResult = await renderBundle(resolved.recipeBundle, absOut, answersWithProvided, {
     ...opts,
     skipWriteableCheck: true,
     extraIgnorePatterns: [...(opts.extraIgnorePatterns ?? []), ...childSubdirIgnorePatterns],
   });
 
   return { outputPath: absOut, children: childResults, recipe: recipeResult };
+}
+
+/**
+ * Walk the recipe's immediate component children, evaluating each one's
+ * provides expressions in its own scope. Returns the flat `provided` map.
+ *
+ * Recipe children contribute nothing here — they have no provides at this
+ * level (M6.1 enforces). Their internal children will produce their own
+ * `provided` map at their own recipe level.
+ *
+ * Bare-array `provides` declarations (M6.1 form) contribute symbol entries
+ * with empty-string values: the contract is declared but no sibling-visible
+ * value is produced. Consumers reading `provided.X` see "" — same as any
+ * undefined Nunjucks value.
+ */
+function collectProvided(resolved: ResolvedRecipe, answers: Answers): Record<string, string> {
+  const provided: Record<string, string> = {};
+  for (const [key, child] of resolved.children) {
+    const m = child.bundle.manifest;
+    if (m.type !== 'component' || !m.provides) continue;
+    const childScope = buildChildScope(answers, key);
+    if (Array.isArray(m.provides)) {
+      for (const symbol of m.provides) {
+        provided[symbol] = '';
+      }
+      continue;
+    }
+    for (const [symbol, expression] of Object.entries(m.provides)) {
+      provided[symbol] = renderText(expression, childScope);
+    }
+  }
+  return provided;
 }
 
 function buildChildScope(answers: Answers, key: string): Answers {

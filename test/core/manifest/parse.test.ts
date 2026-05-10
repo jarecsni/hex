@@ -516,12 +516,32 @@ describe('parseManifestObject — provides / consumes / requires (M6.1)', () => 
     kind: 'api',
   };
 
-  it('accepts a component with provides', () => {
+  it('accepts a component with provides (array form)', () => {
     const m = parseManifestObject({
       ...baseComponent,
       provides: ['HTTP_PORT', 'api_routes_dir'],
     });
     expect(m.provides).toEqual(['HTTP_PORT', 'api_routes_dir']);
+  });
+
+  it('accepts a component with provides (map form — symbol → expression)', () => {
+    const m = parseManifestObject({
+      ...baseComponent,
+      provides: {
+        DB_URL: 'postgres://{{ host }}:{{ port }}/{{ database }}',
+        HTTP_PORT: '{{ port }}',
+      },
+    });
+    expect(m.provides).toEqual({
+      DB_URL: 'postgres://{{ host }}:{{ port }}/{{ database }}',
+      HTTP_PORT: '{{ port }}',
+    });
+  });
+
+  it('rejects an empty key in provides map form', () => {
+    expect(() => parseManifestObject({ ...baseComponent, provides: { '': 'something' } })).toThrow(
+      ManifestError,
+    );
   });
 
   it('accepts a component with consumes', () => {
