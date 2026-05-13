@@ -13,6 +13,14 @@ export type ComponentBundle = {
    * sandbox without re-reading from disk.
    */
   jsHookSources: Record<string, string>;
+  /**
+   * Where this bundle came from. `'file'` means a local FileSource (the
+   * user's working tree or a configured `kind: path` source root) —
+   * eligible for `--trust-local` opt-out of sandboxing. `'git'` means a
+   * GitSource (cached or marketplace) — always sandboxed regardless of
+   * the flag.
+   */
+  sourceKind: 'file' | 'git';
 };
 
 export class SourceError extends Error {
@@ -57,8 +65,17 @@ async function findManifest(rootPath: string): Promise<string> {
  * Load a component bundle from a local filesystem path.
  *
  * The path must be an existing directory containing `.hex/manifest.yaml`.
+ *
+ * `sourceKind` marks where the bundle originated. The default `'file'`
+ * is correct for direct path arguments and configured path-source
+ * discovery; the recipe resolver passes `'git'` when loading from a
+ * cached GitSource clone so the trust-gradient (M7.6) can distinguish
+ * the two.
  */
-export async function loadFromPath(path: string): Promise<ComponentBundle> {
+export async function loadFromPath(
+  path: string,
+  sourceKind: 'file' | 'git' = 'file',
+): Promise<ComponentBundle> {
   const rootPath = isAbsolute(path) ? path : resolve(process.cwd(), path);
 
   let s: Awaited<ReturnType<typeof stat>>;
@@ -74,7 +91,7 @@ export async function loadFromPath(path: string): Promise<ComponentBundle> {
   const manifestPath = await findManifest(rootPath);
   const manifest = await parseManifestFile(manifestPath);
   const jsHookSources = await loadJsHookSources(rootPath, manifest);
-  return { manifest, rootPath, jsHookSources };
+  return { manifest, rootPath, jsHookSources, sourceKind };
 }
 
 /**

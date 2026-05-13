@@ -47,6 +47,15 @@ export type RunJsHooksOptions = {
    * skipping the prompts.
    */
   prompter?: Prompter;
+  /**
+   * Trust-local exec path (M7.6). When true, hooks run unsandboxed in
+   * the host Node process via `Function()` — convenient for component
+   * development. The caller (`renderBundle`) gates this on the bundle's
+   * `sourceKind === 'file'`, so git/marketplace bundles never hit this
+   * path even if the user passed `--trust-local`. A loud warning is
+   * emitted through the configured log sink per hook executed this way.
+   */
+  trustLocal?: boolean;
 };
 
 /**
@@ -105,11 +114,57 @@ export async function runJsHooks(
   const eligible = hooks.filter((h) => !h.when || evalWhen(h.when, live));
   if (eligible.length === 0) return live;
 
+  const log = opts.log ?? defaultLog;
+  const projectFs = new ProjectFs(outputPath);
+
+  if (opts.trustLocal) {
+    for (const hook of eligible) {
+      const source = sources[hook.js];
+      if (source === undefined) {
+        throw new HookExecutionError(
+          `${lifecycle} hook "${hook.js}" has no source loaded — bundle loader missed it`,
+          lifecycle,
+          hook.js,
+        );
+      }
+      if (hook.prompts && hook.prompts.length > 0) {
+        if (!opts.prompter) {
+          throw new HookExecutionError(
+            `${lifecycle} hook "${hook.js}" declares prompts but no prompter is configured`,
+            lifecycle,
+            hook.js,
+          );
+        }
+        const ns = hookNamespace(hook);
+        const namespaced = await runPrompts(hook.prompts, opts.prompter, {});
+        live = mergeHookAnswers(live, ns, namespaced);
+      }
+      log.warn(`running unsandboxed ${lifecycle} hook "${hook.js}" (trust-local active)`);
+      try {
+        const fn = new Function('answers', 'project', 'recipe', 'log', source) as (
+          answers: Answers,
+          project: ProjectFs,
+          recipe: RecipeContext | null,
+          log: HookLog,
+        ) => unknown;
+        await fn(live, projectFs, opts.recipe ?? null, log);
+      } catch (err) {
+        const detail = err instanceof Error ? err.message : String(err);
+        throw new HookExecutionError(
+          `${lifecycle} hook "${hook.js}" failed: ${detail}`,
+          lifecycle,
+          hook.js,
+          { cause: err },
+        );
+      }
+    }
+    return live;
+  }
+
   const sandbox = await createSandbox();
   try {
-    sandbox.installProjectFs(new ProjectFs(outputPath));
+    sandbox.installProjectFs(projectFs);
     sandbox.installGlobal('recipe', opts.recipe ?? null);
-    const log = opts.log ?? defaultLog;
     sandbox.installHostObject('log', {
       info: (msg) => {
         log.info(String(msg ?? ''));

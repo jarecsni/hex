@@ -87,12 +87,13 @@ export async function executeNewRender(
   bundle: ComponentBundle,
   outputDir: string,
   ctx: NewContext,
-  opts: { force: boolean; prompter?: Prompter },
+  opts: { force: boolean; prompter?: Prompter; trustLocal?: boolean },
 ): Promise<NewRenderSummary> {
   if (ctx.resolved) {
     const result = await renderRecipe(ctx.resolved, outputDir, ctx.answers, {
       force: opts.force,
       prompter: opts.prompter,
+      trustLocal: opts.trustLocal,
     });
     const counts = summariseRecipeRender(result);
     return {
@@ -105,6 +106,7 @@ export async function executeNewRender(
   const result = await renderBundle(bundle, outputDir, ctx.answers, {
     force: opts.force,
     prompter: opts.prompter,
+    trustLocal: opts.trustLocal,
   });
   return {
     written: result.written.length,
@@ -153,11 +155,16 @@ export function registerNew(program: Command): void {
     .argument('[output]', 'path where the generated project will be written')
     .option('-f, --force', 'overwrite a non-empty output directory', false)
     .option('--no-setup', 'skip the post-render interactive setup loop')
+    .option(
+      '--trust-local',
+      'run JS hooks unsandboxed for local FileSource components (dev workflow; ignored for git/marketplace sources)',
+      false,
+    )
     .action(
       async (
         templateArg: string | undefined,
         outputArg: string | undefined,
-        opts: { force: boolean; setup: boolean },
+        opts: { force: boolean; setup: boolean; trustLocal: boolean },
       ) => {
         process.stdout.write(`${splash()}\n`);
         clack.intro(brand.honeyBold(' hex new '));
@@ -175,11 +182,18 @@ export function registerNew(program: Command): void {
         const ctx = await collectNewAnswers(bundle, prompter, config);
         for (const w of ctx.warnings) clack.log.warn(w);
 
+        if (opts.trustLocal) {
+          clack.log.warn(
+            `${brand.bold('--trust-local active')}: JS hooks from local FileSource components will run unsandboxed in this Node process. Git/marketplace components remain sandboxed.`,
+          );
+        }
+
         const spinner = clack.spinner();
         spinner.start('rendering');
         const result = await executeNewRender(bundle, outputDir, ctx, {
           force: opts.force,
           prompter,
+          trustLocal: opts.trustLocal,
         });
         const summaryTail =
           result.childCount > 0
@@ -236,7 +250,7 @@ function looksLikePath(arg: string): boolean {
 
 async function resolveTemplate(arg: string | undefined): Promise<ComponentBundle> {
   if (arg && looksLikePath(arg)) {
-    return loadFromPath(arg);
+    return loadFromPath(arg, 'file');
   }
 
   const config = await loadConfig();
@@ -251,7 +265,7 @@ async function resolveTemplate(arg: string | undefined): Promise<ComponentBundle
         `no template named "${arg}" found in configured source roots — try "hex list" to see what's available, or pass a path.`,
       );
     }
-    return loadFromPath(match.rootPath);
+    return loadFromPath(match.rootPath, match.sourceKind);
   }
 
   if (templates.length === 0) {
@@ -263,14 +277,15 @@ async function resolveTemplate(arg: string | undefined): Promise<ComponentBundle
   const picked = await clack.select({
     message: 'Pick a template',
     options: templates.map((t) => ({
-      value: t.rootPath,
+      value: { rootPath: t.rootPath, sourceKind: t.sourceKind },
       label: `${t.name} ${brand.dim(`@${t.version}`)}`,
       hint: hintFor(t),
     })),
   });
   if (clack.isCancel(picked)) throw new PromptCancelledError();
 
-  return loadFromPath(picked as string);
+  const choice = picked as { rootPath: string; sourceKind: 'file' | 'git' };
+  return loadFromPath(choice.rootPath, choice.sourceKind);
 }
 
 function hintFor(t: TemplateEntry): string {

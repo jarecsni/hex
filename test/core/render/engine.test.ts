@@ -406,6 +406,61 @@ hooks:
     expect(sink).toEqual(['hooked at replicas=4']);
   });
 
+  it('honours --trust-local for a FileSource bundle (warning emitted, hook runs unsandboxed)', async () => {
+    const root = await buildWithJsHook({
+      lifecycle: 'pre_render',
+      hookSource: "project.write('marker.txt', 'unsandboxed');",
+    });
+    const bundle = await loadFromPath(root);
+    expect(bundle.sourceKind).toBe('file');
+    const out = join(work, 'out');
+    const warnings: string[] = [];
+    await renderBundle(
+      bundle,
+      out,
+      {},
+      {
+        trustLocal: true,
+        hookLog: {
+          info: () => {},
+          warn: (msg) => warnings.push(msg),
+          error: () => {},
+        },
+      },
+    );
+    expect(await readFile(join(out, 'marker.txt'), 'utf8')).toBe('unsandboxed');
+    expect(warnings).toContain(
+      'running unsandboxed pre_render hook "pre_render.js" (trust-local active)',
+    );
+  });
+
+  it('ignores --trust-local for a git-sourced bundle (sandboxed regardless)', async () => {
+    const root = await buildWithJsHook({
+      lifecycle: 'pre_render',
+      hookSource: "project.write('marker.txt', 'sandboxed');",
+    });
+    const bundle = await loadFromPath(root, 'git');
+    expect(bundle.sourceKind).toBe('git');
+    const out = join(work, 'out');
+    const warnings: string[] = [];
+    await renderBundle(
+      bundle,
+      out,
+      {},
+      {
+        trustLocal: true,
+        hookLog: {
+          info: () => {},
+          warn: (msg) => warnings.push(msg),
+          error: () => {},
+        },
+      },
+    );
+    expect(await readFile(join(out, 'marker.txt'), 'utf8')).toBe('sandboxed');
+    // No "running unsandboxed" warning — the git origin overrides the user's intent.
+    expect(warnings.filter((w) => w.includes('unsandboxed'))).toEqual([]);
+  });
+
   it('exposes recipe metadata to JS hooks when RenderOptions.recipe is set', async () => {
     const sink: Array<{ level: string; msg: string }> = [];
     const root = await buildWithJsHook({

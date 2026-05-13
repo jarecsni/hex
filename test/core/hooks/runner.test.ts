@@ -305,6 +305,94 @@ describe('runJsHooks', () => {
     });
   });
 
+  describe('trust-local unsandboxed exec (M7.6)', () => {
+    it('runs each hook via Function() and emits a loud warning per hook', async () => {
+      const warnings: string[] = [];
+      const log: HookLog = {
+        info: () => {},
+        warn: (msg) => warnings.push(msg),
+        error: () => {},
+      };
+      const sources = {
+        'a.js': "project.write('a.out', 'A');",
+        'b.js': "project.write('b.out', 'B');",
+      };
+      await runJsHooks(
+        'pre_render',
+        [{ js: 'a.js' }, { js: 'b.js' }],
+        sources,
+        work,
+        {},
+        { log, trustLocal: true },
+      );
+      expect(await readFile(join(work, 'a.out'), 'utf8')).toBe('A');
+      expect(await readFile(join(work, 'b.out'), 'utf8')).toBe('B');
+      expect(warnings).toEqual([
+        'running unsandboxed pre_render hook "a.js" (trust-local active)',
+        'running unsandboxed pre_render hook "b.js" (trust-local active)',
+      ]);
+    });
+
+    it('produces the same output as the sandboxed path for an equivalent hook', async () => {
+      const sources = { 'h.js': "project.write('out.txt', 'replicas=' + answers.replicas);" };
+
+      const sandboxWork = await mkdtemp(join(tmpdir(), 'hex-tl-sb-'));
+      const trustWork = await mkdtemp(join(tmpdir(), 'hex-tl-trust-'));
+      try {
+        await runJsHooks('pre_render', [{ js: 'h.js' }], sources, sandboxWork, { replicas: 3 });
+        await runJsHooks(
+          'pre_render',
+          [{ js: 'h.js' }],
+          sources,
+          trustWork,
+          { replicas: 3 },
+          { trustLocal: true, log: { info: () => {}, warn: () => {}, error: () => {} } },
+        );
+        const sandboxed = await readFile(join(sandboxWork, 'out.txt'), 'utf8');
+        const trusted = await readFile(join(trustWork, 'out.txt'), 'utf8');
+        expect(sandboxed).toBe(trusted);
+        expect(sandboxed).toBe('replicas=3');
+      } finally {
+        await rm(sandboxWork, { recursive: true, force: true });
+        await rm(trustWork, { recursive: true, force: true });
+      }
+    });
+
+    it('still surfaces a throwing hook as HookExecutionError in trust-local mode', async () => {
+      const sources = { 'boom.js': "throw new Error('still aborts')" };
+      await expect(
+        runJsHooks(
+          'pre_render',
+          [{ js: 'boom.js' }],
+          sources,
+          work,
+          {},
+          { trustLocal: true, log: { info: () => {}, warn: () => {}, error: () => {} } },
+        ),
+      ).rejects.toThrow(/pre_render hook "boom.js" failed.*still aborts/s);
+    });
+
+    it('honours when:-falsy hooks (no warning emitted, no execution)', async () => {
+      const warnings: string[] = [];
+      const log: HookLog = {
+        info: () => {},
+        warn: (msg) => warnings.push(msg),
+        error: () => {},
+      };
+      const sources = { 'h.js': "project.write('should-not-exist.txt', '');" };
+      await runJsHooks(
+        'pre_render',
+        [{ js: 'h.js', when: 'enabled' }],
+        sources,
+        work,
+        { enabled: false },
+        { trustLocal: true, log },
+      );
+      expect(warnings).toEqual([]);
+      await expect(readFile(join(work, 'should-not-exist.txt'), 'utf8')).rejects.toThrow();
+    });
+  });
+
   it('runs many hooks in declaration order within a single sandbox', async () => {
     const sources = {
       'a.js':
