@@ -17,6 +17,12 @@ export type TemplateEntry = {
    * `<url>@<ref>` (or just `<url>`) — never the cache path.
    */
   sourceRoot: string;
+  /**
+   * Trust-gradient marker (M7.6). `'file'` for local path sources;
+   * `'git'` for cached git/marketplace sources. Used downstream to
+   * decide whether `--trust-local` may bypass the JS-hook sandbox.
+   */
+  sourceKind: 'file' | 'git';
 };
 
 export type DiscoveryResult = {
@@ -92,6 +98,8 @@ type ResolvedRoot = {
   walkRoot: string;
   /** User-facing label (config path or `<url>@<ref>`). */
   displaySourceRoot: string;
+  /** Marker for the trust gradient (M7.6). */
+  sourceKind: 'file' | 'git';
 };
 
 async function resolveSourceRoot(
@@ -106,13 +114,13 @@ async function resolveSourceRoot(
         { url: source.url, ref: source.ref },
         { cacheDir: opts.cacheDir },
       );
-      return { walkRoot: result.localPath, displaySourceRoot: display };
+      return { walkRoot: result.localPath, displaySourceRoot: display, sourceKind: 'git' };
     } catch (err) {
       warnings.push(`git source ${display}: ${err instanceof Error ? err.message : String(err)}`);
       return null;
     }
   }
-  return { walkRoot: source.path, displaySourceRoot: source.path };
+  return { walkRoot: source.path, displaySourceRoot: source.path, sourceKind: 'file' };
 }
 
 async function walkSourceRoot(
@@ -121,7 +129,7 @@ async function walkSourceRoot(
   seenNames: Map<string, TemplateEntry>,
   warnings: string[],
 ): Promise<void> {
-  const { walkRoot, displaySourceRoot } = root;
+  const { walkRoot, displaySourceRoot, sourceKind } = root;
 
   let rootStat: Awaited<ReturnType<typeof stat>>;
   try {
@@ -167,6 +175,7 @@ async function walkSourceRoot(
         kind: manifest.kind,
         rootPath: childPath,
         sourceRoot: displaySourceRoot,
+        sourceKind,
       };
 
       const previous = seenNames.get(manifest.name);

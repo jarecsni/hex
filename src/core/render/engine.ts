@@ -48,6 +48,13 @@ export type RenderOptions = {
    * Required when any such hook is reachable; omitted otherwise.
    */
   prompter?: Prompter;
+  /**
+   * Trust-local opt-out (M7.6). When true AND the bundle's
+   * `sourceKind` is `'file'`, JS hooks for this bundle run unsandboxed
+   * in the host Node process. Bundles with `sourceKind === 'git'`
+   * ignore the flag and stay sandboxed.
+   */
+  trustLocal?: boolean;
 };
 
 const BINARY_SAMPLE_BYTES = 8192;
@@ -124,6 +131,11 @@ export async function renderBundle(
   // post_render JS hooks).
   let live: Answers = answers;
 
+  // Trust-local only fires for FileSource bundles — git/marketplace
+  // bundles always sandbox, no matter what the CLI passed. M7.6 trust
+  // gradient is the bundle's, not the user's.
+  const trustLocalEffective = opts.trustLocal === true && bundle.sourceKind === 'file';
+
   // Pre-render JS hooks need the output dir to exist so the project FS
   // facade can write into it. mkdir is idempotent — the recipe-root
   // render path may already have populated it via children, which is
@@ -135,6 +147,7 @@ export async function renderBundle(
       recipe: opts.recipe,
       log: opts.hookLog,
       prompter: opts.prompter,
+      trustLocal: trustLocalEffective,
     });
   }
 
@@ -177,6 +190,7 @@ export async function renderBundle(
       recipe: opts.recipe,
       log: opts.hookLog,
       prompter: opts.prompter,
+      trustLocal: trustLocalEffective,
     });
   }
 

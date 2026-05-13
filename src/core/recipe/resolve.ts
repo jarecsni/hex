@@ -150,14 +150,14 @@ async function loadChild(
   if (ref.kind === 'file') {
     const baseDir = opts.cwd ?? recipeBundle.rootPath;
     const resolvedPath = isAbsolute(ref.path) ? ref.path : resolvePath(baseDir, ref.path);
-    return loadFromPath(resolvedPath);
+    return loadFromPath(resolvedPath, 'file');
   }
   if (ref.kind === 'git') {
     const result = await resolveGitSource(
       { url: ref.url, ref: ref.ref },
       { cacheDir: opts.cacheDir },
     );
-    return loadFromPath(result.localPath);
+    return loadFromPath(result.localPath, 'git');
   }
   if (ref.kind === 'slot') {
     if (!discovered) {
@@ -187,7 +187,7 @@ async function loadChild(
         'internal resolver invariant violated: matches non-empty but first is undefined',
       );
     }
-    return loadFromPath(picked.rootPath);
+    return loadFromPath(picked.rootPath, picked.sourceKind);
   }
   // ref.kind === 'name'
   if (!discovered) {
@@ -199,7 +199,7 @@ async function loadChild(
       `no template named "${ref.name}" found in configured source roots (version spec "${ref.versionSpec}" — version matching is M5.x)`,
     );
   }
-  return loadFromPath(match.rootPath);
+  return loadFromPath(match.rootPath, match.sourceKind);
 }
 
 function describeRef(ref: ChildRef): string {
