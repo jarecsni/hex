@@ -233,3 +233,143 @@ version: 0.1.0
     expect(written.equals(binary)).toBe(true);
   });
 });
+
+describe('renderBundle — JS hooks (M7.4 lifecycle wiring)', () => {
+  async function buildWithJsHook(opts: {
+    lifecycle: 'pre_render' | 'post_render';
+    hookSource: string;
+    hookFilename?: string;
+    when?: string;
+    extraFiles?: Record<string, string>;
+    /** Extra YAML entries to append to the same lifecycle array. */
+    sameLifecycleExtras?: string[];
+  }): Promise<string> {
+    const filename = opts.hookFilename ?? `${opts.lifecycle}.js`;
+    const whenSuffix = opts.when ? `, when: "${opts.when}"` : '';
+    const extras = (opts.sameLifecycleExtras ?? []).map((e) => `    - ${e}`).join('\n');
+    const manifest = `type: component
+name: demo
+version: 0.1.0
+hooks:
+  ${opts.lifecycle}:
+    - { js: ${filename}${whenSuffix} }${extras ? `\n${extras}` : ''}
+`;
+    const root = await buildTemplate({ manifest, files: opts.extraFiles });
+    await mkdir(join(root, '.hex', 'hooks'), { recursive: true });
+    await writeFile(join(root, '.hex', 'hooks', filename), opts.hookSource, 'utf8');
+    return root;
+  }
+
+  it('runs pre_render before the render walk (hook writes a file, walk then writes alongside it)', async () => {
+    const root = await buildWithJsHook({
+      lifecycle: 'pre_render',
+      hookSource: "project.write('from-hook.txt', 'pre');",
+      extraFiles: { 'from-walk.txt': 'walked' },
+    });
+    const bundle = await loadFromPath(root);
+    const out = join(work, 'out');
+    await renderBundle(bundle, out, {});
+    expect(await readFile(join(out, 'from-hook.txt'), 'utf8')).toBe('pre');
+    expect(await readFile(join(out, 'from-walk.txt'), 'utf8')).toBe('walked');
+  });
+
+  it('a throwing pre_render hook aborts the render before any file is walked', async () => {
+    const root = await buildWithJsHook({
+      lifecycle: 'pre_render',
+      hookSource: "throw new Error('abort');",
+      extraFiles: { 'unwanted.txt': 'should not exist' },
+    });
+    const bundle = await loadFromPath(root);
+    const out = join(work, 'out');
+    await expect(renderBundle(bundle, out, {})).rejects.toThrow(
+      /pre_render hook "pre_render.js" failed/,
+    );
+    await expect(readFile(join(out, 'unwanted.txt'), 'utf8')).rejects.toThrow();
+  });
+
+  it('runs post_render after the render walk (hook can rewrite a freshly-rendered file)', async () => {
+    const root = await buildWithJsHook({
+      lifecycle: 'post_render',
+      hookSource: "project.write('greeting.txt', project.read('greeting.txt').toUpperCase());",
+      extraFiles: { 'greeting.txt': 'hello, {{ name }}!' },
+    });
+    const bundle = await loadFromPath(root);
+    const out = join(work, 'out');
+    await renderBundle(bundle, out, { name: 'world' });
+    expect(await readFile(join(out, 'greeting.txt'), 'utf8')).toBe('HELLO, WORLD!');
+  });
+
+  it('runs post_render JS hooks AFTER the declarative hooks at the same lifecycle', async () => {
+    // Declarative rename `gitignore` → `.gitignore`, then JS hook
+    // observes the renamed file via project.read and rewrites it.
+    const root = await buildWithJsHook({
+      lifecycle: 'post_render',
+      hookSource: "project.write('.gitignore', project.read('.gitignore') + '\\n# extended');",
+      extraFiles: { gitignore: 'node_modules/' },
+      sameLifecycleExtras: ['{ rename: { from: gitignore, to: .gitignore } }'],
+    });
+    const bundle = await loadFromPath(root);
+    const out = join(work, 'out');
+    await renderBundle(bundle, out, {});
+    expect(await readFile(join(out, '.gitignore'), 'utf8')).toBe('node_modules/\n# extended');
+  });
+
+  it('skips JS hooks whose when: expression is falsy', async () => {
+    const root = await buildWithJsHook({
+      lifecycle: 'pre_render',
+      hookSource: "project.write('flag.txt', 'on');",
+      when: 'enabled',
+    });
+    const bundle = await loadFromPath(root);
+    const out = join(work, 'out');
+    await renderBundle(bundle, out, { enabled: false });
+    await expect(readFile(join(out, 'flag.txt'), 'utf8')).rejects.toThrow();
+  });
+
+  it('exposes answers, recipe (null for standalone), and log to JS hooks', async () => {
+    const sink: Array<{ level: string; msg: string }> = [];
+    const root = await buildWithJsHook({
+      lifecycle: 'pre_render',
+      hookSource: `log.info('answers.name=' + answers.name + ' recipe=' + (recipe === null ? 'none' : recipe.name));`,
+    });
+    const bundle = await loadFromPath(root);
+    const out = join(work, 'out');
+    await renderBundle(
+      bundle,
+      out,
+      { name: 'demo' },
+      {
+        hookLog: {
+          info: (msg) => sink.push({ level: 'info', msg }),
+          warn: (msg) => sink.push({ level: 'warn', msg }),
+          error: (msg) => sink.push({ level: 'error', msg }),
+        },
+      },
+    );
+    expect(sink).toEqual([{ level: 'info', msg: 'answers.name=demo recipe=none' }]);
+  });
+
+  it('exposes recipe metadata to JS hooks when RenderOptions.recipe is set', async () => {
+    const sink: Array<{ level: string; msg: string }> = [];
+    const root = await buildWithJsHook({
+      lifecycle: 'pre_render',
+      hookSource: "log.info(recipe.name + '@' + recipe.version);",
+    });
+    const bundle = await loadFromPath(root);
+    const out = join(work, 'out');
+    await renderBundle(
+      bundle,
+      out,
+      {},
+      {
+        recipe: { name: 'node-ts-monorepo', version: '1.2.3' },
+        hookLog: {
+          info: (msg) => sink.push({ level: 'info', msg }),
+          warn: () => {},
+          error: () => {},
+        },
+      },
+    );
+    expect(sink).toEqual([{ level: 'info', msg: 'node-ts-monorepo@1.2.3' }]);
+  });
+});

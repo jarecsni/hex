@@ -1,6 +1,8 @@
 import { mkdir, readFile, readdir, stat, writeFile } from 'node:fs/promises';
 import { dirname, isAbsolute, resolve, sep } from 'node:path';
 import { type HookResult, runPostRenderHooks } from '../hooks/declarative.js';
+import { type HookLog, type RecipeContext, runJsHooks } from '../hooks/runner.js';
+import type { JsHook } from '../manifest/types.js';
 import type { Answers } from '../prompts/types.js';
 import type { ComponentBundle } from '../sources/file-source.js';
 import { shouldInclude } from './include-rules.js';
@@ -30,6 +32,17 @@ export type RenderOptions = {
    * template tree can't accidentally rewrite child output).
    */
   extraIgnorePatterns?: string[];
+  /**
+   * Recipe metadata forwarded to JS hooks as the `recipe` global. Set
+   * by `renderRecipe` when calling `renderBundle` on a child; left
+   * undefined for standalone component renders.
+   */
+  recipe?: RecipeContext;
+  /**
+   * Override the JS-hook log sink. Defaults to console.{log,warn,error}.
+   * Tests inject a capturing sink here.
+   */
+  hookLog?: HookLog;
 };
 
 const BINARY_SAMPLE_BYTES = 8192;
@@ -100,6 +113,19 @@ export async function renderBundle(
     await ensureWriteableTarget(absOut, opts.force ?? false);
   }
 
+  // Pre-render JS hooks need the output dir to exist so the project FS
+  // facade can write into it. mkdir is idempotent — the recipe-root
+  // render path may already have populated it via children, which is
+  // fine.
+  const preRenderJsHooks = (bundle.manifest.hooks?.pre_render ?? []) as JsHook[];
+  if (preRenderJsHooks.length > 0) {
+    await mkdir(absOut, { recursive: true });
+    await runJsHooks('pre_render', preRenderJsHooks, bundle.jsHookSources, absOut, answers, {
+      recipe: opts.recipe,
+      log: opts.hookLog,
+    });
+  }
+
   const includeRules = bundle.manifest.include ?? [];
   const written: string[] = [];
 
@@ -126,10 +152,20 @@ export async function renderBundle(
     written.push(renderedRel);
   }
 
-  const hooks = bundle.manifest.hooks?.post_render ?? [];
-  const hookResult = await runPostRenderHooks(absOut, hooks, answers, written, {
+  const postRenderHooks = bundle.manifest.hooks?.post_render ?? [];
+  const hookResult = await runPostRenderHooks(absOut, postRenderHooks, answers, written, {
     force: opts.force ?? false,
   });
+
+  // JS hooks run AFTER the declarative pass so they observe the
+  // final shape of the tree (post-rename, post-delete).
+  const postRenderJsHooks = postRenderHooks.filter((h): h is JsHook => 'js' in h);
+  if (postRenderJsHooks.length > 0) {
+    await runJsHooks('post_render', postRenderJsHooks, bundle.jsHookSources, absOut, answers, {
+      recipe: opts.recipe,
+      log: opts.hookLog,
+    });
+  }
 
   return { written, ...hookResult };
 }

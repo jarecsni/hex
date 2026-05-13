@@ -85,6 +85,54 @@ export class Sandbox {
   }
 
   /**
+   * Install a JS value as a top-level global inside the sandbox.
+   *
+   * Used by the hook runner to surface `answers`, `recipe`, and other
+   * read-only context objects to hook code. The value is marshalled
+   * via {@link marshal} — strings, numbers, booleans, null/undefined,
+   * arrays, and plain objects (recursive) are supported.
+   */
+  installGlobal(name: string, value: unknown): void {
+    if (this.disposed) {
+      throw new SandboxError('Sandbox has been disposed');
+    }
+    const handle = marshal(this.context, value);
+    this.context.setProp(this.context.global, name, handle);
+    handle.dispose();
+  }
+
+  /**
+   * Install a `<name>.<method>` host-function namespace. Each method is
+   * bridged so its arguments are dumped to JS values and the return
+   * value is marshalled back. Errors thrown by the host functions
+   * surface inside the hook as catchable JS errors.
+   */
+  installHostObject(name: string, methods: Record<string, (...args: unknown[]) => unknown>): void {
+    if (this.disposed) {
+      throw new SandboxError('Sandbox has been disposed');
+    }
+    const ctx = this.context;
+    const obj = ctx.newObject();
+    for (const [methodName, impl] of Object.entries(methods)) {
+      const handle = ctx.newFunction(methodName, (...argHandles) => {
+        const args = argHandles.map((h) => ctx.dump(h));
+        try {
+          const result = impl(...args);
+          return marshal(ctx, result);
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err);
+          const errName = err instanceof Error && err.name ? err.name : 'Error';
+          return { error: ctx.newError({ name: errName, message }) };
+        }
+      });
+      ctx.setProp(obj, methodName, handle);
+      handle.dispose();
+    }
+    ctx.setProp(ctx.global, name, obj);
+    obj.dispose();
+  }
+
+  /**
    * Install a sandboxed `project.*` API into the sandbox's globalThis.
    *
    * Exposes `read`, `write`, `delete`, `exists`, and `list` as host functions
@@ -152,8 +200,11 @@ export class Sandbox {
 }
 
 function marshal(ctx: QuickJSContext, value: unknown): QuickJSHandle {
-  if (value === undefined || value === null) {
+  if (value === undefined) {
     return ctx.undefined;
+  }
+  if (value === null) {
+    return ctx.null;
   }
   if (typeof value === 'string') {
     return ctx.newString(value);
@@ -172,6 +223,15 @@ function marshal(ctx: QuickJSContext, value: unknown): QuickJSHandle {
       elem.dispose();
     }
     return arr;
+  }
+  if (typeof value === 'object') {
+    const obj = ctx.newObject();
+    for (const [key, v] of Object.entries(value as Record<string, unknown>)) {
+      const prop = marshal(ctx, v);
+      ctx.setProp(obj, key, prop);
+      prop.dispose();
+    }
+    return obj;
   }
   throw new SandboxError(`cannot marshal value of type ${typeof value} into sandbox`);
 }
