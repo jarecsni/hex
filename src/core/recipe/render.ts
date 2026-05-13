@@ -75,6 +75,17 @@ export async function renderRecipe(
   const absOut = isAbsolute(outputPath) ? outputPath : resolve(process.cwd(), outputPath);
   await ensureWriteableTarget(absOut, opts.force ?? false);
 
+  // Recipe metadata threaded into every child's hook context (and the
+  // recipe-root's own hooks). `opts.recipe` is only set when this
+  // recipe is itself nested inside an outer recipe — in that case we
+  // *keep* the outermost recipe in the context so hooks can reach the
+  // top-level identity, not the immediate parent recipe.
+  const recipeMeta = opts.recipe ?? {
+    name: resolved.recipeBundle.manifest.name,
+    version: resolved.recipeBundle.manifest.version,
+  };
+  const childOpts: RenderOptions = { ...opts, recipe: recipeMeta };
+
   const childResults = new Map<string, ChildRenderResult>();
   const usedSubdirs = new Map<string, string>();
 
@@ -104,7 +115,7 @@ export async function renderRecipe(
       // child's subdir. The nested recipe's own children + recipe root all
       // land within childOut. Surface nested basics on the flat fields and
       // the full tree on `nestedRecipe`.
-      const nested = await renderRecipe(child.resolved, childOut, childScope, opts);
+      const nested = await renderRecipe(child.resolved, childOut, childScope, childOpts);
       childResults.set(key, {
         ...nested.recipe,
         subdir,
@@ -114,13 +125,13 @@ export async function renderRecipe(
       continue;
     }
 
-    const result = await renderBundle(child.bundle, childOut, childScope, opts);
+    const result = await renderBundle(child.bundle, childOut, childScope, childOpts);
     childResults.set(key, { ...result, subdir, outputPath: childOut });
   }
 
   const childSubdirIgnorePatterns = [...usedSubdirs.keys()].map((sub) => `${sub}/`);
   const recipeResult = await renderBundle(resolved.recipeBundle, absOut, answersWithProvided, {
-    ...opts,
+    ...childOpts,
     skipWriteableCheck: true,
     extraIgnorePatterns: [...(opts.extraIgnorePatterns ?? []), ...childSubdirIgnorePatterns],
   });
