@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.0] — 2026-05-14
+
 ### Added
 
 - M7.7 — `node-ts-hooked` reference component dogfooding the M7 JS-hook surface end-to-end. The bundle's `.hex/manifest.yaml` declares both a `pre_render` JS hook (logs the rendering context — answers, recipe metadata) and a `post_render` JS hook (`name: repository`) with its own `prompts:` block. The post_render hook reads the rendered `package.json` via `project.read`, parses it, optionally splices in a `"repository": "github:owner/name"` field based on the hook-prompt answer (validated, with branch-by-branch `log.info`/`log.warn`), and writes back via `project.write`. The accompanying integration test (`test/integration/node-ts-hooked.test.ts`) exercises the full load → top-level prompts → render → pre_render → walk → post_render path, including the empty-coord, malformed-coord, and `--trust-local` parity branches. Closes M7.
