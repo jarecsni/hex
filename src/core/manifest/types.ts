@@ -109,24 +109,35 @@ export type Setup = {
   tasks?: SetupTask[];
 };
 
-export type NameChildRef = {
+/**
+ * `stub` (M8.2) is a per-slot recipe decision, orthogonal to which ref
+ * variant resolves the child. When `true`, the recipe is opting that
+ * child into stub mode — the resolver verifies the resolved component
+ * declares a `stub:` block, and `stub_enabled` lands in the child's
+ * render context.
+ */
+export type ChildRefStub = {
+  stub?: boolean;
+};
+
+export type NameChildRef = ChildRefStub & {
   kind: 'name';
   name: string;
   versionSpec: string;
 };
 
-export type FileChildRef = {
+export type FileChildRef = ChildRefStub & {
   kind: 'file';
   path: string;
 };
 
-export type GitChildRef = {
+export type GitChildRef = ChildRefStub & {
   kind: 'git';
   url: string;
   ref?: string;
 };
 
-export type SlotChildRef = {
+export type SlotChildRef = ChildRefStub & {
   kind: 'slot';
   /** The component kind to match against discovered templates. */
   componentKind: string;

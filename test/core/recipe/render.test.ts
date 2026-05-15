@@ -838,3 +838,44 @@ kind: api
     expect(await readFile(join(out, 'inner', 'api', '.env.template'), 'utf8')).toBe('URL=[]');
   });
 });
+
+describe('renderRecipe — stub_enabled in child scope (M8.2)', () => {
+  async function buildStubRecipe(stub: boolean): Promise<string> {
+    const recipeRoot = join(work, 'recipe');
+    const dbRoot = join(work, 'children', 'db');
+    await writeManifest(
+      recipeRoot,
+      `type: recipe
+name: demo
+version: 0.1.0
+composes:
+  db:
+    component: file:../children/db
+${stub ? '    stub: true\n' : ''}`,
+    );
+    await writeManifest(
+      dbRoot,
+      `type: component
+name: db-postgres
+version: 2.0.0
+kind: db
+stub:
+  engine: pg-mem
+`,
+    );
+    await writeFileEnsure(join(dbRoot, 'mode.txt'), 'stub={{ stub_enabled }}');
+
+    const resolved = await loadResolved(recipeRoot);
+    const out = join(work, 'out');
+    await renderRecipe(resolved, out, {});
+    return readFile(join(out, 'db', 'mode.txt'), 'utf8');
+  }
+
+  it('exposes stub_enabled=true to a stubbed child', async () => {
+    expect(await buildStubRecipe(true)).toBe('stub=true');
+  });
+
+  it('exposes stub_enabled=false to a non-stubbed child', async () => {
+    expect(await buildStubRecipe(false)).toBe('stub=false');
+  });
+});
