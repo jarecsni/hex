@@ -123,6 +123,17 @@ async function resolveRecipeRec(
         );
       }
 
+      // M8.2: stub mode is only valid for a component that ships a
+      // `stub:` block. A recipe child can never be stubbed (recipes
+      // carry no `stub:`), and a real-only component must not be asked
+      // to stub. Reject at resolve time so the error names the slot.
+      if (ref.stub === true && !bundle.manifest.stub) {
+        throw new RecipeResolutionError(
+          `child "${key}" requests stub mode (stub: true) but "${bundle.manifest.name}" declares no \`stub:\` block — it is not stubbable`,
+          key,
+        );
+      }
+
       let resolved: ResolvedRecipe | undefined;
       if (bundle.manifest.type === 'recipe') {
         const cycleAt = ctx.pathStack.findIndex((p) => p.rootPath === bundle.rootPath);

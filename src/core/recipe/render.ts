@@ -109,6 +109,11 @@ export async function renderRecipe(
 
     const childOut = resolve(absOut, subdir);
     const childScope = buildChildScope(answersWithProvided, key);
+    // M8.2: surface the recipe's per-slot stub decision as a well-known
+    // `stub_enabled` answer so the child's `include:` rules and Nunjucks
+    // templates can branch on `{% if stub_enabled %}`. Always set (false
+    // when not stubbed) so `not stub_enabled` reads cleanly too.
+    childScope.stub_enabled = child.ref.stub === true;
 
     if (child.resolved) {
       // Recipe child — recursively render the nested recipe tree into the

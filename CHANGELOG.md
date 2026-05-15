@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- M8.2 — Recipe-side stub-per-slot wiring. A recipe's `composes:` block accepts a new long object form — `db: { component: <spec>, stub?: true }` — where `component` is any of the existing string wire forms (`<name>@<version>`, `file:`, `git+`); `stub: true` is also accepted on the M6.3 slot form (`{ kind, version, stub: true }`). Every `ChildRef` now carries an optional `stub` flag. At resolve time, `stub: true` against a component that declares no `stub:` block (or against a recipe) is rejected with a `RecipeResolutionError` naming the slot. When a child is stubbed, the well-known `stub_enabled` answer (`true`/`false`) lands in that child's render context, so `include:` rules and Nunjucks `{% if stub_enabled %}` can branch on it.
 - M8.1 — Manifest `stub:` block on components. A component can declare `stub: { engine: <id>, fixtures?: <path> }` to advertise that it supports stub mode; absent `stub:` means the component is real-only. `engine` is validated against a closed catalogue (`STUB_ENGINES` — initially `pg-mem`, `msw`, `wiremock`, extensible by editing the one list). `fixtures` is an optional non-empty path (M8.4 will render it into the generated tree). The block is rejected on recipes (component-only, like `provides`/`consumes`/`requires`) and rejects unknown keys.
 
 ## [0.7.0] — 2026-05-14

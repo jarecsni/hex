@@ -569,3 +569,72 @@ describe('resolveRecipe — slot refs (M6.3)', () => {
     );
   });
 });
+
+describe('resolveRecipe — stub-per-slot (M8.2)', () => {
+  it('resolves a { component, stub: true } slot when the child is stubbable', async () => {
+    const recipeRoot = join(work, 'recipe');
+    const childRoot = join(work, 'children', 'db');
+    await writeManifest(recipeRoot, {
+      type: 'recipe',
+      name: 'demo',
+      version: '0.1.0',
+      composes: { db: { component: 'file:../children/db', stub: true } },
+    });
+    await writeManifest(childRoot, {
+      type: 'component',
+      name: 'db-postgres',
+      version: '2.0.0',
+      kind: 'db',
+      stub: { engine: 'pg-mem' },
+    });
+
+    const recipeBundle = await loadFromPath(recipeRoot);
+    const result = await resolveRecipe(recipeBundle, { config: { sources: [] } });
+
+    const db = result.children.get('db');
+    expect(db?.bundle.manifest.name).toBe('db-postgres');
+    expect(db?.ref).toMatchObject({ kind: 'file', path: '../children/db', stub: true });
+  });
+
+  it('rejects stub: true when the resolved component declares no stub block', async () => {
+    const recipeRoot = join(work, 'recipe');
+    const childRoot = join(work, 'children', 'db');
+    await writeManifest(recipeRoot, {
+      type: 'recipe',
+      name: 'demo',
+      version: '0.1.0',
+      composes: { db: { component: 'file:../children/db', stub: true } },
+    });
+    await writeManifest(childRoot, {
+      type: 'component',
+      name: 'db-real-only',
+      version: '1.0.0',
+      kind: 'db',
+    });
+
+    const recipeBundle = await loadFromPath(recipeRoot);
+    await expect(resolveRecipe(recipeBundle, { config: { sources: [] } })).rejects.toThrow(
+      /requests stub mode .* not stubbable/,
+    );
+  });
+
+  it('allows a { component } slot without stub against a real-only component', async () => {
+    const recipeRoot = join(work, 'recipe');
+    const childRoot = join(work, 'children', 'db');
+    await writeManifest(recipeRoot, {
+      type: 'recipe',
+      name: 'demo',
+      version: '0.1.0',
+      composes: { db: { component: 'file:../children/db' } },
+    });
+    await writeManifest(childRoot, {
+      type: 'component',
+      name: 'db-real-only',
+      version: '1.0.0',
+    });
+
+    const recipeBundle = await loadFromPath(recipeRoot);
+    const result = await resolveRecipe(recipeBundle, { config: { sources: [] } });
+    expect(result.children.get('db')?.ref.stub).toBeFalsy();
+  });
+});

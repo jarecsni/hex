@@ -199,6 +199,21 @@ const slotComposesEntryShape = z
     version: z
       .string()
       .regex(VERSION_SPEC_RE, 'composes slot version must be a recognized semver spec'),
+    // M8.2: opt this slot into stub mode. The resolver verifies the
+    // chosen component declares a `stub:` block.
+    stub: z.boolean().optional(),
+  })
+  .strict();
+
+// M8.2 long form: `{ component: <string-spec>, stub?: boolean }`. The
+// `component` value is any of the three string wire forms; `stub`
+// opts the slot into stub mode. Kept separate from the slot shape so
+// `{ component, stub }` and `{ kind, version, stub }` stay distinct and
+// each rejects the other's keys via `.strict()`.
+const componentComposesEntryShape = z
+  .object({
+    component: z.string().min(1),
+    stub: z.boolean().optional(),
   })
   .strict();
 
@@ -284,6 +299,26 @@ export const composesEntrySchema = z.unknown().transform((val, ctx) => {
     return parsed.data;
   }
   if (val && typeof val === 'object' && !Array.isArray(val)) {
+    // M8.2 long form `{ component: <spec>, stub? }` — dispatched by the
+    // `component` key, distinct from the slot form's `kind` key.
+    if ('component' in val) {
+      const parsed = componentComposesEntryShape.safeParse(val);
+      if (!parsed.success) {
+        for (const issue of parsed.error.issues) {
+          ctx.addIssue(issue as Parameters<typeof ctx.addIssue>[0]);
+        }
+        return z.NEVER;
+      }
+      const inner = stringComposesEntrySchema.safeParse(parsed.data.component);
+      if (!inner.success) {
+        for (const issue of inner.error.issues) {
+          ctx.addIssue(issue as Parameters<typeof ctx.addIssue>[0]);
+        }
+        return z.NEVER;
+      }
+      return { ...inner.data, stub: parsed.data.stub };
+    }
+
     const parsed = slotComposesEntryShape.safeParse(val);
     if (!parsed.success) {
       // Forward each sub-schema issue to the parent context. Cast to the
@@ -299,11 +334,13 @@ export const composesEntrySchema = z.unknown().transform((val, ctx) => {
       kind: 'slot' as const,
       componentKind: parsed.data.kind,
       versionSpec: parsed.data.version,
+      stub: parsed.data.stub,
     };
   }
   ctx.addIssue({
     code: 'custom',
-    message: 'composes entry must be a string or { kind, version } object',
+    message:
+      'composes entry must be a string, a { kind, version } slot, or a { component, stub } object',
   });
   return z.NEVER;
 });

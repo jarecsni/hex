@@ -869,6 +869,59 @@ describe('parseManifestObject — composes slot form (M6.3)', () => {
     expect(m.composes?.local?.kind).toBe('file');
   });
 
+  it('parses a { component, stub } long form into a ChildRef carrying stub (M8.2)', () => {
+    const m = parseManifestObject({
+      ...baseRecipe,
+      composes: { db: { component: 'db-postgres@^2.0.0', stub: true } },
+    });
+    expect(m.composes?.db).toEqual({
+      kind: 'name',
+      name: 'db-postgres',
+      versionSpec: '^2.0.0',
+      stub: true,
+    });
+  });
+
+  it('parses a { component } long form without stub (M8.2)', () => {
+    const m = parseManifestObject({
+      ...baseRecipe,
+      composes: { db: { component: 'file:./packages/db' } },
+    });
+    expect(m.composes?.db?.kind).toBe('file');
+    expect(m.composes?.db?.stub).toBeUndefined();
+  });
+
+  it('accepts stub: true on the slot form (M8.2)', () => {
+    const m = parseManifestObject({
+      ...baseRecipe,
+      composes: { db: { kind: 'db', version: '^2.0.0', stub: true } },
+    });
+    expect(m.composes?.db).toEqual({
+      kind: 'slot',
+      componentKind: 'db',
+      versionSpec: '^2.0.0',
+      stub: true,
+    });
+  });
+
+  it('rejects an unknown key in a { component, stub } long form (M8.2)', () => {
+    expect(() =>
+      parseManifestObject({
+        ...baseRecipe,
+        composes: { db: { component: 'db-postgres@^2.0.0', mock: true } },
+      }),
+    ).toThrow(ManifestError);
+  });
+
+  it('rejects a non-boolean stub flag (M8.2)', () => {
+    expect(() =>
+      parseManifestObject({
+        ...baseRecipe,
+        composes: { db: { component: 'db-postgres@^2.0.0', stub: 'yes' } },
+      }),
+    ).toThrow(ManifestError);
+  });
+
   it('rejects a slot entry with a non-kebab kind', () => {
     expect(() =>
       parseManifestObject({
