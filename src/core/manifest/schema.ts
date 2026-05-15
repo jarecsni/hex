@@ -348,6 +348,27 @@ export const requirementSchema = z.union([requireByKindSchema, requireByNameVers
 
 export const requiresSchema = z.array(requirementSchema);
 
+// Stub-mode declaration (M8.1). A component with a `stub:` block supports
+// stub mode via the named engine; absent `stub:` = real-only.
+//
+// `STUB_ENGINES` is the known-engine catalogue. It is deliberately a
+// closed enum at the schema layer — a typo'd engine id is an authoring
+// error worth catching at parse time. Adding an engine here is the
+// single extension point; downstream milestones (M8.3 out-of-process
+// dedup, M8.5 lint) read this same list.
+//
+// `fixtures` is an optional path, relative to the bundle root, to a
+// directory of seed data. M8.4 renders it into the generated tree when
+// stub mode is active; M8.1 only validates it as a non-empty string.
+export const STUB_ENGINES = ['pg-mem', 'msw', 'wiremock'] as const;
+
+export const stubSchema = z
+  .object({
+    engine: z.enum(STUB_ENGINES),
+    fixtures: z.string().min(1).optional(),
+  })
+  .strict();
+
 // Manifest schema with prompts already desugared (each entry { name, def }).
 // `sections:` opts the manifest into total coverage — every prompt must
 // appear in exactly one section, and section entries must reference real
@@ -375,9 +396,10 @@ export const manifestSchema = z
     provides: providesSchema.optional(),
     consumes: consumesSchema.optional(),
     requires: requiresSchema.optional(),
+    stub: stubSchema.optional(),
   })
   .superRefine((manifest, ctx) => {
-    for (const field of ['provides', 'consumes', 'requires'] as const) {
+    for (const field of ['provides', 'consumes', 'requires', 'stub'] as const) {
       if (manifest[field] && manifest.type !== 'component') {
         ctx.addIssue({
           code: 'custom',

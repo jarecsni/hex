@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- M8.1 — Manifest `stub:` block on components. A component can declare `stub: { engine: <id>, fixtures?: <path> }` to advertise that it supports stub mode; absent `stub:` means the component is real-only. `engine` is validated against a closed catalogue (`STUB_ENGINES` — initially `pg-mem`, `msw`, `wiremock`, extensible by editing the one list). `fixtures` is an optional non-empty path (M8.4 will render it into the generated tree). The block is rejected on recipes (component-only, like `provides`/`consumes`/`requires`) and rejects unknown keys.
+
 ## [0.7.0] — 2026-05-14
 
 ### Added

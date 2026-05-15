@@ -1019,3 +1019,72 @@ describe('parseManifestObject — composes (M5.2 wire forms)', () => {
     expect(m.composes?.ui?.kind).toBe('git');
   });
 });
+
+describe('parseManifestObject — stub block (M8.1)', () => {
+  const baseComponent = {
+    type: 'component' as const,
+    name: 'db-postgres',
+    version: '2.0.0',
+    kind: 'db',
+  };
+
+  it('absent stub leaves the component real-only', () => {
+    const m = parseManifestObject(baseComponent);
+    expect(m.stub).toBeUndefined();
+  });
+
+  it('accepts a stub block with a known engine', () => {
+    const m = parseManifestObject({ ...baseComponent, stub: { engine: 'pg-mem' } });
+    expect(m.stub).toEqual({ engine: 'pg-mem' });
+  });
+
+  it('accepts a stub block with an optional fixtures path', () => {
+    const m = parseManifestObject({
+      ...baseComponent,
+      stub: { engine: 'pg-mem', fixtures: 'fixtures/' },
+    });
+    expect(m.stub).toEqual({ engine: 'pg-mem', fixtures: 'fixtures/' });
+  });
+
+  it('accepts each engine in the known catalogue', () => {
+    for (const engine of ['pg-mem', 'msw', 'wiremock'] as const) {
+      const m = parseManifestObject({ ...baseComponent, stub: { engine } });
+      expect(m.stub?.engine).toBe(engine);
+    }
+  });
+
+  it('rejects an unknown engine id', () => {
+    expect(() => parseManifestObject({ ...baseComponent, stub: { engine: 'sqlite-mem' } })).toThrow(
+      ManifestError,
+    );
+  });
+
+  it('rejects a stub block missing the engine field', () => {
+    expect(() =>
+      parseManifestObject({ ...baseComponent, stub: { fixtures: 'fixtures/' } }),
+    ).toThrow(ManifestError);
+  });
+
+  it('rejects an empty fixtures path', () => {
+    expect(() =>
+      parseManifestObject({ ...baseComponent, stub: { engine: 'msw', fixtures: '' } }),
+    ).toThrow(ManifestError);
+  });
+
+  it('rejects unknown keys in the stub block', () => {
+    expect(() =>
+      parseManifestObject({ ...baseComponent, stub: { engine: 'msw', seed: true } }),
+    ).toThrow(ManifestError);
+  });
+
+  it('rejects a stub block on a recipe', () => {
+    expect(() =>
+      parseManifestObject({
+        type: 'recipe',
+        name: 'stack',
+        version: '1.0.0',
+        stub: { engine: 'pg-mem' },
+      }),
+    ).toThrow(/only allowed on components/);
+  });
+});
