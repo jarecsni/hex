@@ -150,6 +150,22 @@ export type Requirement = RequireByKind | RequireByNameVersion;
  */
 export type Provides = string[] | Record<string, string>;
 
+/**
+ * Stub-mode declaration (M8.1). A component carrying a `stub:` block
+ * advertises that it supports stub mode via the named engine. Absent
+ * `stub:` means the component is real-only.
+ *
+ * `engine` is one of a known catalogue (`STUB_ENGINES` in schema.ts);
+ * `fixtures` optionally points at a directory of seed data that M8.4
+ * renders into the generated tree when stub mode is active.
+ */
+export type StubEngine = 'pg-mem' | 'msw' | 'wiremock';
+
+export type Stub = {
+  engine: StubEngine;
+  fixtures?: string;
+};
+
 export type Manifest = {
   type: 'component' | 'recipe';
   name: string;
@@ -164,4 +180,5 @@ export type Manifest = {
   provides?: Provides;
   consumes?: string[];
   requires?: Requirement[];
+  stub?: Stub;
 };
