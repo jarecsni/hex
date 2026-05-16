@@ -79,7 +79,7 @@ export type MarketplaceResolveResult = {
   fetchedAt: string;
 };
 
-const registryIndexSchema = z.object({
+export const registryIndexSchema = z.object({
   name: z.string().min(1),
   versions: z
     .array(
@@ -116,7 +116,7 @@ function slug(input: string): string {
 }
 
 /** Compare two semver versions by their numeric triplet (prerelease ignored). */
-function compareVersions(a: string, b: string): number {
+export function compareVersions(a: string, b: string): number {
   const pa = /^(\d+)\.(\d+)\.(\d+)/.exec(a);
   const pb = /^(\d+)\.(\d+)\.(\d+)/.exec(b);
   if (!pa || !pb) return 0;
@@ -141,7 +141,7 @@ export function pickVersion(available: string[], spec: string): string | null {
 }
 
 /** Default fetcher: `file://` reads from disk, `http(s)://` uses `fetch`. */
-const defaultFetcher: Fetcher = async (url) => {
+export const defaultFetcher: Fetcher = async (url) => {
   if (url.startsWith('file:')) {
     try {
       return await readFile(fileURLToPath(url));
