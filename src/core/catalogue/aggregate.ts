@@ -1,4 +1,5 @@
 import type { MarketplaceConfig } from '../marketplace/address.js';
+import { type AggregatePolicy, isBlocked } from '../marketplace/policy.js';
 import type { Fetcher } from '../marketplace/source.js';
 import { createMarketplaceCatalogue } from './marketplace.js';
 import type { CatalogueEntry } from './types.js';
@@ -57,6 +58,11 @@ export type AggregateCatalogue = {
 export type AggregateCatalogueOpts = {
   /** Override the URL fetcher (test injection). */
   fetcher?: Fetcher;
+  /**
+   * Block/override policy (M9.6). When set, `search` / `browse` drop
+   * any entry whose `<marketplace>/<name>` is blocked.
+   */
+  policy?: AggregatePolicy;
 };
 
 /**
@@ -76,7 +82,11 @@ export function createAggregateCatalogue(
     for (const mkt of marketplaces) {
       try {
         const found = await op(mkt);
-        for (const e of found) entries.push({ ...e, marketplace: mkt.id });
+        for (const e of found) {
+          // M9.6: blocked qualified names are dropped from discovery.
+          if (opts.policy && isBlocked(opts.policy, mkt.id, e.name)) continue;
+          entries.push({ ...e, marketplace: mkt.id });
+        }
       } catch (err) {
         warnings.push(`${mkt.id}: ${err instanceof Error ? err.message : String(err)}`);
       }

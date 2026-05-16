@@ -24,6 +24,17 @@ import { type Catalogue, type CatalogueEntry, CatalogueError } from './types.js'
 
 const semverRe = /^\d+\.\d+\.\d+(?:[-+].*)?$/;
 
+/**
+ * Block + override policy a company marketplace ships inside its
+ * `catalogue.json` (M9.6). Granularity is by qualified name only.
+ */
+const policySchema = z.object({
+  /** Qualified names (`<marketplace>/<name>`) hidden from discovery + resolution. */
+  block: z.array(z.string().min(1)).default([]),
+  /** Bare-name → qualified-name preferences for resolution. */
+  override: z.array(z.object({ name: z.string().min(1), use: z.string().min(1) })).default([]),
+});
+
 const catalogueDocSchema = z.object({
   packages: z
     .array(
@@ -37,7 +48,11 @@ const catalogueDocSchema = z.object({
       }),
     )
     .default([]),
+  policy: policySchema.optional(),
 });
+
+/** The full parsed `catalogue.json` — packages plus optional policy. */
+export type CatalogueDoc = z.infer<typeof catalogueDocSchema>;
 
 export type MarketplaceCatalogueOpts = {
   /** Override the URL fetcher (test injection). */
@@ -46,6 +61,45 @@ export type MarketplaceCatalogueOpts = {
 
 function registryBase(registry: string): string {
   return registry.endsWith('/') ? registry : `${registry}/`;
+}
+
+/**
+ * Fetch + schema-validate a registry's `catalogue.json`. Shared by the
+ * `Catalogue` discovery methods and the M9.6 policy loader, so both see
+ * exactly the same parsed document.
+ */
+export async function fetchCatalogueDoc(
+  registry: string,
+  fetcher: Fetcher = defaultFetcher,
+): Promise<CatalogueDoc> {
+  const url = new URL('catalogue.json', registryBase(registry)).href;
+  let raw: Buffer;
+  try {
+    raw = await fetcher(url);
+  } catch (err) {
+    throw new CatalogueError(
+      `cannot load catalogue from ${registry}: ${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
+  let json: unknown;
+  try {
+    json = JSON.parse(raw.toString('utf8'));
+  } catch (err) {
+    throw new CatalogueError(
+      `catalogue.json from ${registry} is not valid JSON: ${
+        err instanceof Error ? err.message : String(err)
+      }`,
+    );
+  }
+  const parsed = catalogueDocSchema.safeParse(json);
+  if (!parsed.success) {
+    throw new CatalogueError(
+      `catalogue.json from ${registry} failed validation: ${parsed.error.issues
+        .map((i) => i.message)
+        .join('; ')}`,
+    );
+  }
+  return parsed.data;
 }
 
 /**
@@ -64,34 +118,8 @@ export function createMarketplaceCatalogue(
   const base = registryBase(registry);
 
   async function loadCatalogue(): Promise<CatalogueEntry[]> {
-    const url = new URL('catalogue.json', base).href;
-    let raw: Buffer;
-    try {
-      raw = await fetcher(url);
-    } catch (err) {
-      throw new CatalogueError(
-        `cannot load catalogue from ${registry}: ${err instanceof Error ? err.message : String(err)}`,
-      );
-    }
-    let json: unknown;
-    try {
-      json = JSON.parse(raw.toString('utf8'));
-    } catch (err) {
-      throw new CatalogueError(
-        `catalogue.json from ${registry} is not valid JSON: ${
-          err instanceof Error ? err.message : String(err)
-        }`,
-      );
-    }
-    const parsed = catalogueDocSchema.safeParse(json);
-    if (!parsed.success) {
-      throw new CatalogueError(
-        `catalogue.json from ${registry} failed validation: ${parsed.error.issues
-          .map((i) => i.message)
-          .join('; ')}`,
-      );
-    }
-    return parsed.data.packages.map((p) => ({
+    const doc = await fetchCatalogueDoc(registry, fetcher);
+    return doc.packages.map((p) => ({
       name: p.name,
       type: p.type,
       kind: p.kind,

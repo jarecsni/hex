@@ -1,6 +1,7 @@
 import { createMarketplaceCatalogue } from '../catalogue/marketplace.js';
 import { CatalogueError } from '../catalogue/types.js';
 import type { TrustedKeys } from './package.js';
+import { type AggregatePolicy, emptyPolicy, isBlocked, qualifiedName } from './policy.js';
 import {
   type Fetcher,
   type MarketplaceResolveResult,
@@ -23,9 +24,9 @@ import {
  * resolved by trying each configured marketplace in order, first hit
  * wins.
  *
- * This module owns *addressing* only. The ordered marketplace list is
- * passed in — wiring it from `~/.hex/config.yaml` is M9.5
- * (multi-marketplace aggregation), and block/override policy is M9.6.
+ * The ordered marketplace list is passed in (wired from
+ * `~/.hex/config.yaml` by M9.5). `resolveAddress` also honours the M9.6
+ * block/override policy when one is supplied.
  */
 
 export class AddressError extends Error {
@@ -124,6 +125,12 @@ export type ResolveAddressOpts = {
   refresh?: boolean;
   /** Override the URL fetcher (test injection). */
   fetcher?: Fetcher;
+  /**
+   * Block/override policy (M9.6). Blocked qualified names are refused;
+   * a bare name with an override is redirected to the override target.
+   * Defaults to an empty policy.
+   */
+  policy?: AggregatePolicy;
 };
 
 /** A resolved address — the fetch result plus the marketplace it came from. */
@@ -143,12 +150,17 @@ export type ResolvedAddress = MarketplaceResolveResult & {
  * a version satisfying the spec wins. A marketplace that simply lacks
  * the package is skipped; if none provide it, the collected reasons are
  * reported.
+ *
+ * Policy (M9.6): a blocked qualified name is refused outright; a bare
+ * name carrying an override is redirected to the override's qualified
+ * target (keeping the caller's version spec).
  */
 export async function resolveAddress(
   input: string,
   opts: ResolveAddressOpts,
 ): Promise<ResolvedAddress> {
   const address = parseAddress(input);
+  const policy = opts.policy ?? emptyPolicy();
   const fetchOpts = {
     trustedKeys: opts.trustedKeys,
     cacheDir: opts.cacheDir,
@@ -156,24 +168,57 @@ export async function resolveAddress(
     fetcher: opts.fetcher,
   };
 
-  if (address.marketplace !== null) {
-    const mkt = opts.marketplaces.find((m) => m.id === address.marketplace);
+  const findMarketplace = (id: string): MarketplaceConfig => {
+    const mkt = opts.marketplaces.find((m) => m.id === id);
     if (!mkt) {
       const configured = opts.marketplaces.map((m) => m.id).join(', ') || '(none)';
-      throw new AddressError(
-        `marketplace "${address.marketplace}" is not configured (configured: ${configured})`,
-      );
+      throw new AddressError(`marketplace "${id}" is not configured (configured: ${configured})`);
     }
+    return mkt;
+  };
+
+  const resolveFrom = async (mkt: MarketplaceConfig, name: string): Promise<ResolvedAddress> => {
     const result = await resolveMarketplaceSource(
-      { registry: mkt.registry, name: address.name, version: address.version },
+      { registry: mkt.registry, name, version: address.version },
       fetchOpts,
     );
     return { ...result, marketplace: mkt.id, address };
+  };
+
+  // Qualified address — pin exactly the named marketplace.
+  if (address.marketplace !== null) {
+    const mkt = findMarketplace(address.marketplace);
+    if (isBlocked(policy, mkt.id, address.name)) {
+      throw new AddressError(
+        `"${qualifiedName(mkt.id, address.name)}" is blocked by marketplace policy`,
+      );
+    }
+    return resolveFrom(mkt, address.name);
+  }
+
+  // Bare address with an override — redirect to the qualified target.
+  const override = policy.overrides.get(address.name);
+  if (override !== undefined) {
+    const target = parseAddress(override);
+    if (target.marketplace === null) {
+      throw new AddressError(
+        `policy override for "${address.name}" must be a qualified name, got "${override}"`,
+      );
+    }
+    const mkt = findMarketplace(target.marketplace);
+    if (isBlocked(policy, mkt.id, target.name)) {
+      throw new AddressError(`override target "${override}" is blocked by marketplace policy`);
+    }
+    return resolveFrom(mkt, target.name);
   }
 
   // Bare address — walk marketplaces in order, first satisfying hit wins.
   const skipped: string[] = [];
   for (const mkt of opts.marketplaces) {
+    if (isBlocked(policy, mkt.id, address.name)) {
+      skipped.push(`  ${mkt.id}: blocked by marketplace policy`);
+      continue;
+    }
     let versions: string[];
     try {
       versions = await createMarketplaceCatalogue(mkt.registry, {
@@ -189,11 +234,7 @@ export async function resolveAddress(
       skipped.push(`  ${mkt.id}: no version satisfies "${address.version}"`);
       continue;
     }
-    const result = await resolveMarketplaceSource(
-      { registry: mkt.registry, name: address.name, version: address.version },
-      fetchOpts,
-    );
-    return { ...result, marketplace: mkt.id, address };
+    return resolveFrom(mkt, address.name);
   }
 
   const detail = skipped.length > 0 ? `\n${skipped.join('\n')}` : '';
