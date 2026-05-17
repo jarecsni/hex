@@ -4,11 +4,17 @@ import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import type { Prompter } from '../../src/core/prompts/types.js';
+import {
+  buildLockfile,
+  checkLockfileIntegrity,
+  readLockfileUpward,
+  writeLockfile,
+} from '../../src/core/lockfile/index.js';
+import type { Answers, Prompter } from '../../src/core/prompts/types.js';
 import { runRecipePrompts } from '../../src/core/recipe/prompts.js';
 import { renderRecipe } from '../../src/core/recipe/render.js';
-import { resolveRecipe } from '../../src/core/recipe/resolve.js';
-import { loadFromPath } from '../../src/core/sources/file-source.js';
+import { type ResolvedRecipe, resolveRecipe } from '../../src/core/recipe/resolve.js';
+import { type ComponentBundle, loadFromPath } from '../../src/core/sources/file-source.js';
 
 // Absolute path to the M8.6 reference component shipped in-repo. The
 // recipe composes it via a `file:` spec so this test exercises the real
@@ -83,6 +89,10 @@ type Rendered = {
   out: string;
   /** The `db` child subdir within the output root. */
   db: string;
+  /** Render inputs — kept so the lockfile dogfood can rebuild from them. */
+  bundle: ComponentBundle;
+  resolved: ResolvedRecipe;
+  answers: Answers;
 };
 
 /** Render the recipe (stub on/off) into a fresh output dir. */
@@ -95,7 +105,7 @@ async function renderWithStub(stubbed: boolean): Promise<Rendered> {
   // same `work` tmpdir without tripping the non-empty-target guard.
   const out = await mkdtemp(join(work, 'out-'));
   await renderRecipe(resolved, out, answers, { force: true });
-  return { out, db: join(out, 'db') };
+  return { out, db: join(out, 'db'), bundle, resolved, answers };
 }
 
 describe('M8.7 — stub recipe integration: db-postgres rendered stub on/off', () => {
@@ -150,6 +160,42 @@ describe('M8.7 — stub recipe integration: db-postgres rendered stub on/off', (
 
     expect(onlyInReal).toEqual([]);
     expect(onlyInStub.sort()).toEqual(['fixtures', 'fixtures/seed.sql']);
+  });
+
+  it('records each child stub flag in the lockfile, integrity clean either way', async () => {
+    // Dogfood M10 against the stub surface: the lockfile must capture the
+    // slot's stub decision faithfully, and the freshly-rendered tree must
+    // verify clean — whether or not fixtures were emitted.
+    for (const stubbed of [true, false]) {
+      const r = await renderWithStub(stubbed);
+      const lockPath = await writeLockfile(
+        r.out,
+        await buildLockfile({
+          bundle: r.bundle,
+          resolved: r.resolved,
+          answers: r.answers,
+          outputDir: r.out,
+        }),
+      );
+      expect(existsSync(lockPath), `lockfile present stub=${stubbed}`).toBe(true);
+
+      const loaded = await readLockfileUpward(r.out);
+      if (!loaded) throw new Error(`lockfile not found stub=${stubbed}`);
+
+      expect(loaded.lockfile.root.name).toBe('stub-demo');
+      const db = loaded.lockfile.children.find((c) => c.key === 'db');
+      expect(db?.name, `db child present stub=${stubbed}`).toBe('db-postgres');
+      // The stub flag mirrors the slot's `stub:` setting.
+      expect(db?.stub, `stub flag stub=${stubbed}`).toBe(stubbed);
+
+      const integrity = await checkLockfileIntegrity(r.out, loaded.lockfile);
+      expect(integrity, `integrity clean stub=${stubbed}`).toEqual({
+        ok: true,
+        modified: [],
+        missing: [],
+        added: [],
+      });
+    }
   });
 });
 
