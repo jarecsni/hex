@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Added a `prepublishOnly` script (`npm run check && npm run build`) so any future `npm publish` is forced to run the full test suite and recompile `dist/` from current source first — the published tarball can never be a stale build, and a failing test aborts the release. Purely a release-time guard; no behaviour change day-to-day. The package is not yet published.
+
 ### Added
 
 - M9.9 — Public Hex marketplace MVP (registry server). A new top-level `registry/` holds the marketplace registry server — a single dependency-free Node `http` service that closes the M9 epic by hosting the package format the rest of the epic was built against. **Read side**: `GET /catalogue.json`, `GET /<name>/index.json`, `GET /packages/<file>.hexpkg` — the exact static-shaped endpoints `MarketplaceSource` (M9.2) and the `Catalogue` (M9.3) fetch. **Publish**: `POST /publish` accepts a bearer-token-authenticated upload of an *unsigned* bundle tarball, validates it, **signs it with the marketplace key**, and ingests it — developers hold a publish token, not a signing key (marketplace-as-signer, M9.1); publishes are serialised so catalogue/index regeneration never interleaves, and an existing `name@version` is refused (immutable). **Website**: server-rendered search / browse / per-package detail pages, progressively enhanced with HTMX (the `htmx.org` dependency, served from `/assets/htmx.min.js` — never a third-party CDN) for live search. A new `hex publish <dir>` CLI command packs a bundle and uploads it; `registry/keygen.ts` (`npm run registry:keygen`) generates the marketplace keypair. `docs/registry-deploy.md` is the deploy runbook (keypair, tokens, env, TLS, smoke test). 13 tests cover the store, publish flow, every endpoint, and an in-process publish→fetch loop that resolves a just-published package back through `MarketplaceSource` with signature verification. DNS / TLS / hosting on Textology infrastructure remain for the operator.

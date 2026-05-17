@@ -48,7 +48,8 @@
     "typecheck": "tsc --noEmit",
     "lint": "biome check src test registry",
     "format": "biome format --write src test registry",
-    "check": "npm run typecheck && npm run lint && npm run test"
+    "check": "npm run typecheck && npm run lint && npm run test",
+    "prepublishOnly": "npm run check && npm run build"
   },
   "publishConfig": {
     "access": "public"
