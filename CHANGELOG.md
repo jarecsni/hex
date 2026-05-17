@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Lockfile — capture the full nested-recipe tree. The M10.1 `LockChild` schema and the M10.2 `buildLockfile` builder now record composed children **recursively**: a recipe child carries its own descendants under a nested `children` field (a component leaf omits it). This closes the M10.2 known limitation — only the root's immediate children were captured — so the lockfile describes the whole composition tree the M11 upgrade engine needs for pristine reconstruction. The schema's `lockChildSchema` becomes a `z.lazy` recursive type; the builder walks each child's resolved sub-recipe. 3 new tests cover nested-tree schema validation (including recursive rejection of a malformed grandchild) and a three-level `recipe → recipe → component` render whose lockfile records the tree.
 - Added a `prepublishOnly` script (`npm run check && npm run build`) so any future `npm publish` is forced to run the full test suite and recompile `dist/` from current source first — the published tarball can never be a stale build, and a failing test aborts the release. Purely a release-time guard; no behaviour change day-to-day. The package is not yet published.
 
 ### Added

@@ -389,4 +389,72 @@ prompts:
     const bytes = await readFile(join(out, 'package.json'));
     expect(lock.files[0]?.sha256).toBe(createHash('sha256').update(bytes).digest('hex'));
   });
+
+  it('records a nested recipe tree recursively', async () => {
+    // root recipe → composes a `platform` recipe → composes an `api` component.
+    const recipeRoot = join(work, 'recipe');
+    const platformRoot = join(work, 'platform');
+    const apiRoot = join(work, 'api');
+
+    await writeManifest(
+      recipeRoot,
+      `type: recipe
+name: nested-root
+version: 0.1.0
+composes:
+  platform: file:../platform
+`,
+    );
+    await writeFileEnsure(join(recipeRoot, 'README.md'), '# root\n');
+
+    await writeManifest(
+      platformRoot,
+      `type: recipe
+name: platform
+version: 0.2.0
+composes:
+  api: file:../api
+`,
+    );
+    await writeFileEnsure(join(platformRoot, 'infra.ts'), 'export const infra = true;\n');
+
+    await writeManifest(
+      apiRoot,
+      `type: component
+name: api
+version: 0.3.0
+`,
+    );
+    await writeFileEnsure(join(apiRoot, 'server.ts'), 'export const server = true;\n');
+
+    const bundle = await loadFromPath(recipeRoot);
+    const ctx = await collectNewAnswers(bundle, recipePrompter({} as never), { sources: [] });
+    const out = join(work, 'out');
+    await executeNewRender(bundle, out, ctx, { force: false });
+
+    const lock = lockfileSchema.parse(
+      parseYaml(await readFile(join(out, '.hex', 'lockfile.yaml'), 'utf8')),
+    );
+
+    // The recipe child carries its own descendants.
+    expect(lock.children).toHaveLength(1);
+    const platform = lock.children[0];
+    expect(platform).toMatchObject({ key: 'platform', name: 'platform', type: 'recipe' });
+    expect(platform?.children).toHaveLength(1);
+    expect(platform?.children?.[0]).toMatchObject({
+      key: 'api',
+      name: 'api',
+      version: '0.3.0',
+      type: 'component',
+    });
+    // The leaf component carries no `children` key.
+    expect(platform?.children?.[0]?.children).toBeUndefined();
+
+    // The flat file table still covers the whole nested tree.
+    expect(lock.files.map((f) => f.path).sort()).toEqual([
+      'README.md',
+      'platform/api/server.ts',
+      'platform/infra.ts',
+    ]);
+  });
 });
