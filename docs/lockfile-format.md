@@ -117,6 +117,30 @@ a `git:` child reference carries its upstream coordinate verbatim;
 `file:` references, bare `name`/`slot` references, and the root bundle
 are recorded as the resolved local path they loaded from.
 
-## Out of scope for M10.2
+## Reading + integrity (M10.3)
 
-Reading the lockfile back and integrity verification — that is M10.3.
+`readLockfileUpward(startDir)` walks upward from a directory looking for
+`.hex/lockfile.yaml` — the same convention `readChecklistUpward` uses, so
+`hex doctor` and the M11 upgrade engine work from any subdirectory of a
+generated app. It returns the loaded lockfile with its path and the app
+root, or `null` if none is found.
+
+The reader checks `schema_version` *before* full schema validation: a
+file whose version is newer than this build of Hex supports is refused
+with an explicit "upgrade Hex" hint, rather than a wall of schema errors
+from shapes a future format introduced. A malformed file (bad YAML,
+schema mismatch) is rejected with a `LockfileError`.
+
+`checkLockfileIntegrity(rootDir, lockfile)` compares the current tree
+against the recorded hash table and **never throws** — it returns the
+divergence so the caller decides what to do:
+
+| Field      | Meaning                                              |
+| ---------- | ---------------------------------------------------- |
+| `modified` | Recorded files whose current bytes differ            |
+| `missing`  | Recorded files no longer present                     |
+| `added`    | Files now in the tree but absent from the lockfile   |
+| `ok`       | True only when all three are empty                   |
+
+The comparison walk excludes `.hex/`, `.git/`, and `node_modules/` —
+identical to the `buildLockfile` walk, so it stays apples-to-apples.
