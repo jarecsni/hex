@@ -19,6 +19,6 @@
     }
   },
   "files": {
-    "ignore": ["dist/**", "node_modules/**", "*.md"]
+    "ignore": ["dist/**", "registry/dist/**", "registry/assets/**", "node_modules/**", "*.md"]
   }
 }

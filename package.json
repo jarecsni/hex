@@ -39,11 +39,15 @@
     "dev": "tsx src/cli.ts",
     "build": "tsup",
     "start": "node dist/cli.js",
+    "registry:dev": "tsx registry/server.ts",
+    "registry:build": "tsup registry/server.ts registry/keygen.ts --format esm --target node20 --out-dir registry/dist --clean",
+    "registry:start": "node registry/dist/server.js",
+    "registry:keygen": "tsx registry/keygen.ts",
     "test": "vitest run",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",
-    "lint": "biome check src test",
-    "format": "biome format --write src test",
+    "lint": "biome check src test registry",
+    "format": "biome format --write src test registry",
     "check": "npm run typecheck && npm run lint && npm run test"
   },
   "publishConfig": {
