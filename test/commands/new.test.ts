@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -6,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { parse as parseYaml } from 'yaml';
 import { collectNewAnswers, executeNewRender } from '../../src/commands/new.js';
 import { checklistFromTasks, writeChecklist } from '../../src/core/checklist/index.js';
+import { lockfileSchema } from '../../src/core/lockfile/index.js';
 import type { Prompter } from '../../src/core/prompts/types.js';
 import { loadFromPath } from '../../src/core/sources/file-source.js';
 
@@ -280,5 +282,111 @@ setup:
     expect(summary.setupMessage).toBe('Done.');
     const pkg = JSON.parse(await readFile(join(out, 'package.json'), 'utf8'));
     expect(pkg.name).toBe('my-app');
+  });
+});
+
+describe('hex new — lockfile (M10.2)', () => {
+  it('writes a schema-valid lockfile for a recipe matching the rendered tree', async () => {
+    const recipePath = await buildRecipeFixture();
+    const bundle = await loadFromPath(recipePath);
+    const ctx = await collectNewAnswers(
+      bundle,
+      recipePrompter({
+        workspace_name: 'demo',
+        api: { port: 4000 },
+        web: { framework: 'svelte' },
+      }),
+      { sources: [] },
+    );
+
+    const out = join(work, 'out');
+    await executeNewRender(bundle, out, ctx, { force: false });
+
+    const lockPath = join(out, '.hex', 'lockfile.yaml');
+    expect(existsSync(lockPath)).toBe(true);
+
+    // Parses cleanly through the schema — no malformed bytes were written.
+    const lock = lockfileSchema.parse(parseYaml(await readFile(lockPath, 'utf8')));
+
+    expect(lock.schema_version).toBe(1);
+    expect(lock.root).toMatchObject({ name: 'demo-app', version: '0.1.0', type: 'recipe' });
+    expect(lock.root.source.kind).toBe('file');
+
+    // Immediate children, each with its composes key + stub flag.
+    expect(lock.children.map((c) => c.key)).toEqual(['api', 'web']);
+    expect(lock.children.find((c) => c.key === 'api')).toMatchObject({
+      name: 'api',
+      type: 'component',
+      stub: false,
+    });
+
+    // Answers tree is captured verbatim.
+    expect(lock.answers).toEqual(ctx.answers);
+
+    // The file-hash table covers the whole rendered tree and excludes `.hex/`.
+    expect(lock.files.map((f) => f.path).sort()).toEqual([
+      'README.md',
+      'api/server.ts',
+      'web/config.ts',
+    ]);
+    expect(lock.files.some((f) => f.path.startsWith('.hex/'))).toBe(false);
+
+    // Every recorded hash matches the bytes actually on disk.
+    for (const entry of lock.files) {
+      const bytes = await readFile(join(out, entry.path));
+      expect(createHash('sha256').update(bytes).digest('hex')).toBe(entry.sha256);
+    }
+  });
+
+  it('writes a schema-valid lockfile for a standalone component (no children)', async () => {
+    const componentRoot = join(work, 'one-shot');
+    await writeManifest(
+      componentRoot,
+      `type: component
+name: one-shot
+version: 1.2.3
+
+prompts:
+  - project_name:
+      type: string
+      required: true
+`,
+    );
+    await writeFileEnsure(join(componentRoot, 'package.json'), '{"name": "{{ project_name }}"}\n');
+
+    const bundle = await loadFromPath(componentRoot);
+    const prompter: Prompter = {
+      async text(opts) {
+        if (opts.message === 'project_name') return 'my-app';
+        throw new Error(`unexpected text prompt: ${opts.message}`);
+      },
+      async confirm() {
+        throw new Error('confirm not used');
+      },
+      async select() {
+        throw new Error('select not used');
+      },
+      async multiselect() {
+        throw new Error('multiselect not used');
+      },
+      async password() {
+        throw new Error('password not used');
+      },
+    };
+    const ctx = await collectNewAnswers(bundle, prompter, { sources: [] });
+
+    const out = join(work, 'out');
+    await executeNewRender(bundle, out, ctx, { force: false });
+
+    const lock = lockfileSchema.parse(
+      parseYaml(await readFile(join(out, '.hex', 'lockfile.yaml'), 'utf8')),
+    );
+    expect(lock.root).toMatchObject({ name: 'one-shot', version: '1.2.3', type: 'component' });
+    expect(lock.children).toEqual([]);
+    expect(lock.answers).toEqual({ project_name: 'my-app' });
+    expect(lock.files.map((f) => f.path)).toEqual(['package.json']);
+
+    const bytes = await readFile(join(out, 'package.json'));
+    expect(lock.files[0]?.sha256).toBe(createHash('sha256').update(bytes).digest('hex'));
   });
 });
