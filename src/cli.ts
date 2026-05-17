@@ -2,6 +2,7 @@
 import { Command } from 'commander';
 import { brand } from './brand/colors.js';
 import { VERSION, splash } from './brand/splash.js';
+import { registerBrowse } from './commands/browse.js';
 import { registerDoctor } from './commands/doctor.js';
 import { registerLint } from './commands/lint.js';
 import { registerList } from './commands/list.js';
@@ -25,6 +26,7 @@ async function main() {
     .version(VERSION, '-v, --version', 'print version and exit')
     .addHelpText('beforeAll', `${splash()}\n`);
 
+  registerBrowse(program);
   registerDoctor(program);
   registerLint(program);
   registerList(program);
