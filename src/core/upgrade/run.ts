@@ -9,7 +9,11 @@ import {
 } from '../lockfile/index.js';
 import { type MigrationStep, walkUpgradeChain } from './chain.js';
 import { type MergeResult, mergeTrees } from './merge.js';
-import { applyMigration } from './migration.js';
+import {
+  type DiscoveredMigration,
+  discoverMigration,
+  runDiscoveredMigration,
+} from './migration.js';
 import {
   UPGRADE_STATE_SCHEMA_VERSION,
   clearUpgradeState,
@@ -64,8 +68,22 @@ export type RunUpgradeInput = {
 
 /** The result of an upgrade attempt. */
 export type UpgradeOutcome =
-  | { status: 'clean'; from: string; to: string; merge: MergeResult }
-  | { status: 'conflict'; from: string; to: string; merge: MergeResult; conflicts: string[] };
+  | { status: 'clean'; from: string; to: string; merge: MergeResult; userTreeChanges: string[] }
+  | {
+      status: 'conflict';
+      from: string;
+      to: string;
+      merge: MergeResult;
+      conflicts: string[];
+      userTreeChanges: string[];
+    };
+
+/** A user-tree migration deferred past the chain walk to run against the working copy. */
+type DeferredUserTreeMigration = {
+  found: NonNullable<DiscoveredMigration>;
+  from: string;
+  to: string;
+};
 
 const BACKUP_DIRNAME = 'upgrade-backup';
 /** Directories left out of the merge, the snapshot, and the rollback sweep. */
@@ -97,12 +115,16 @@ export async function runUpgrade(input: RunUpgradeInput): Promise<UpgradeOutcome
   const integrity = await checkLockfileIntegrity(root, loaded.lockfile);
   const userModified = new Set(integrity.modified);
 
+  // User-tree migrations (M11.6) bypass the pristine model — the chain
+  // walk collects them here and they run against the working copy below.
+  const deferred: DeferredUserTreeMigration[] = [];
+
   const { pristineOld, pristineNew } = await walkUpgradeChain({
     from,
     to: input.target,
     available: input.environment.availableVersions,
     renderVersion: input.environment.pristineFor,
-    runMigration: (step) => migrateHop(step, input.environment, userModified),
+    runMigration: (step) => migrateHop(step, input.environment, userModified, deferred),
   });
 
   try {
@@ -113,10 +135,13 @@ export async function runUpgrade(input: RunUpgradeInput): Promise<UpgradeOutcome
       theirsLabel: `hex ${input.target}`,
     });
 
+    // Escape-hatch migrations run last, against the freshly merged tree.
+    const userTreeChanges = await applyUserTreeMigrations(root, deferred, userModified);
+
     if (merge.clean) {
       await finalizeLockfile(root, loaded.lockfile, input.target);
       await dropSnapshot(root);
-      return { status: 'clean', from, to: input.target, merge };
+      return { status: 'clean', from, to: input.target, merge, userTreeChanges };
     }
 
     await writeUpgradeState(root, {
@@ -124,8 +149,16 @@ export async function runUpgrade(input: RunUpgradeInput): Promise<UpgradeOutcome
       from,
       to: input.target,
       conflicts: merge.conflicted,
+      user_tree_changes: userTreeChanges,
     });
-    return { status: 'conflict', from, to: input.target, merge, conflicts: merge.conflicted };
+    return {
+      status: 'conflict',
+      from,
+      to: input.target,
+      merge,
+      conflicts: merge.conflicted,
+      userTreeChanges,
+    };
   } finally {
     await rm(pristineOld, { recursive: true, force: true });
     await rm(pristineNew, { recursive: true, force: true });
@@ -185,19 +218,74 @@ export async function abortUpgrade(appRoot: string): Promise<ResumeOutcome> {
   return { from: state.from, to: state.to };
 }
 
-/** Run one hop's migration against its pristine tree, if the version ships one. */
+/**
+ * Run one hop's migration. A normal migration transforms the hop's
+ * pristine tree in place; a user-tree migration (M11.6) is collected
+ * into `deferred` instead — it runs against the working copy after the
+ * merge, not the pristine tree.
+ */
 async function migrateHop(
   step: MigrationStep,
   env: UpgradeEnvironment,
   userModified: Set<string>,
+  deferred: DeferredUserTreeMigration[],
 ): Promise<void> {
   if (!env.migrationsDirFor) return;
   const dir = await env.migrationsDirFor(step.to);
   if (!dir) return;
-  await applyMigration(dir, step.from, step.to, {
+  const found = await discoverMigration(dir, step.from, step.to);
+  if (!found) return;
+  if (found.userTree) {
+    deferred.push({ found, from: step.from, to: step.to });
+    return;
+  }
+  await runDiscoveredMigration(found, step.from, step.to, {
     treeDir: step.toTree,
     isUserModified: (p) => userModified.has(p),
   });
+}
+
+/**
+ * Run the collected user-tree migrations against the working copy and
+ * report which files they touched. Snapshots the tree before and after
+ * so the diff is exactly the escape hatch's footprint.
+ */
+async function applyUserTreeMigrations(
+  root: string,
+  deferred: DeferredUserTreeMigration[],
+  userModified: Set<string>,
+): Promise<string[]> {
+  if (deferred.length === 0) return [];
+  const before = await snapshotContents(root);
+  for (const m of deferred) {
+    await runDiscoveredMigration(m.found, m.from, m.to, {
+      treeDir: root,
+      isUserModified: (p) => userModified.has(p),
+    });
+  }
+  const after = await snapshotContents(root);
+  return diffSnapshots(before, after);
+}
+
+/** Map every working-tree file to its content (protected dirs excluded). */
+async function snapshotContents(root: string): Promise<Map<string, string>> {
+  const out = new Map<string, string>();
+  for (const rel of await collectTreeFiles(root)) {
+    out.set(rel, await readFile(join(root, rel), 'utf8').catch(() => ''));
+  }
+  return out;
+}
+
+/** Sorted relative paths that differ between two content snapshots. */
+function diffSnapshots(before: Map<string, string>, after: Map<string, string>): string[] {
+  const changed = new Set<string>();
+  for (const [rel, content] of after) {
+    if (before.get(rel) !== content) changed.add(rel);
+  }
+  for (const rel of before.keys()) {
+    if (!after.has(rel)) changed.add(rel);
+  }
+  return [...changed].sort();
 }
 
 /** Rewrite the lockfile at `toVersion`, re-hashing the merged tree. */

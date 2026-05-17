@@ -110,6 +110,15 @@ async function runPlainUpgrade(templateArg: string): Promise<void> {
     )}`,
   );
 
+  if (outcome.userTreeChanges.length > 0) {
+    console.log(
+      brand.warn(
+        `⚠ a user-tree migration edited your code directly — review these ${outcome.userTreeChanges.length} file(s):`,
+      ),
+    );
+    for (const file of outcome.userTreeChanges) console.log(`    ${file}`);
+  }
+
   if (outcome.status === 'clean') {
     console.log(brand.done('✓ upgrade complete — lockfile updated'));
     return;

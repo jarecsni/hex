@@ -3,7 +3,11 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { MigrationError, applyMigration } from '../../../src/core/upgrade/migration.js';
+import {
+  MigrationError,
+  applyMigration,
+  discoverMigration,
+} from '../../../src/core/upgrade/migration.js';
 
 let work: string;
 let treeDir: string;
@@ -176,5 +180,31 @@ project.write('generated/by-js.txt', 'hello ' + migration.from + '->' + migratio
     await expect(applyMigration(migrationsDir, FROM, TO, { treeDir })).rejects.toThrow(
       MigrationError,
     );
+  });
+});
+
+describe('discoverMigration — user-tree escape hatch', () => {
+  it('reports a pristine migration as userTree: false', async () => {
+    await writeMigration('yaml', 'steps:\n  - delete: a.txt\n');
+    const found = await discoverMigration(migrationsDir, FROM, TO);
+    expect(found?.userTree).toBe(false);
+  });
+
+  it('reads `user_tree: true` off a declarative migration', async () => {
+    await writeMigration('yaml', 'user_tree: true\nsteps:\n  - delete: a.txt\n');
+    const found = await discoverMigration(migrationsDir, FROM, TO);
+    expect(found).toMatchObject({ kind: 'declarative', userTree: true });
+  });
+
+  it('treats a `.user.js` migration as a user-tree migration', async () => {
+    await writeFile(join(migrationsDir, `${FROM}-to-${TO}.user.js`), 'log.info("hi");', 'utf8');
+    const found = await discoverMigration(migrationsDir, FROM, TO);
+    expect(found).toMatchObject({ kind: 'js', userTree: true });
+  });
+
+  it('rejects a hop carrying both a `.js` and a `.user.js` migration', async () => {
+    await writeMigration('js', 'log.info("a");');
+    await writeFile(join(migrationsDir, `${FROM}-to-${TO}.user.js`), 'log.info("b");', 'utf8');
+    await expect(discoverMigration(migrationsDir, FROM, TO)).rejects.toThrow(MigrationError);
   });
 });

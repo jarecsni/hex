@@ -209,3 +209,79 @@ describe('abortUpgrade', () => {
     await expect(abortUpgrade(app)).rejects.toThrow(UpgradeError);
   });
 });
+
+describe('runUpgrade — user-tree migrations', () => {
+  /** A fresh migrations dir holding one named migration file. */
+  async function migrationsWith(name: string, body: string): Promise<string> {
+    const dir = await mkdtemp(join(work, 'migrations-'));
+    await writeFile(join(dir, name), body, 'utf8');
+    return dir;
+  }
+
+  it('routes a user-tree JS migration against the working copy', async () => {
+    const app = await makeApp({
+      'src/a.ts': "import x from 'old-pkg';\n",
+      'src/b.ts': "import y from 'old-pkg';\n",
+    });
+    // Pristine trees identical at both versions — the 3-way merge is a
+    // clean no-op, so only the codemod touches the tree.
+    const tree = {
+      'src/a.ts': "import x from 'old-pkg';\n",
+      'src/b.ts': "import y from 'old-pkg';\n",
+    };
+    const migrations = await migrationsWith(
+      '1.0.0-to-2.0.0.user.js',
+      `for (var i = 0, names = project.list('src'); i < names.length; i++) {
+  var p = 'src/' + names[i];
+  project.write(p, project.read(p).replace('old-pkg', 'new-pkg'));
+}`,
+    );
+    const env: UpgradeEnvironment = {
+      ...envFrom({ '1.0.0': tree, '2.0.0': tree }),
+      migrationsDirFor: async (to) => (to === '2.0.0' ? migrations : null),
+    };
+
+    const outcome = await runUpgrade({ appRoot: app, target: '2.0.0', environment: env });
+
+    expect(outcome.status).toBe('clean');
+    expect(outcome.userTreeChanges).toEqual(['src/a.ts', 'src/b.ts']);
+    expect(await readApp(app, 'src/a.ts')).toBe("import x from 'new-pkg';\n");
+    expect(await readApp(app, 'src/b.ts')).toBe("import y from 'new-pkg';\n");
+    expect(await lockfileVersion(app)).toBe('2.0.0');
+  });
+
+  it('records the user-tree changes in upgrade-state on the conflict path', async () => {
+    const app = await makeApp({
+      'a.txt': 'line1\nuser-edit\nline3\n',
+      'src/imp.ts': "import x from 'old-pkg';\n",
+    });
+    const migrations = await migrationsWith(
+      '1.0.0-to-2.0.0.user.js',
+      "project.write('src/imp.ts', project.read('src/imp.ts').replace('old-pkg', 'new-pkg'));",
+    );
+    const env: UpgradeEnvironment = {
+      ...envFrom({
+        '1.0.0': {
+          'a.txt': 'line1\noriginal\nline3\n',
+          'src/imp.ts': "import x from 'old-pkg';\n",
+        },
+        '2.0.0': {
+          'a.txt': 'line1\ntemplate-edit\nline3\n',
+          'src/imp.ts': "import x from 'old-pkg';\n",
+        },
+      }),
+      migrationsDirFor: async (to) => (to === '2.0.0' ? migrations : null),
+    };
+
+    const outcome = await runUpgrade({ appRoot: app, target: '2.0.0', environment: env });
+
+    expect(outcome.status).toBe('conflict');
+    expect(outcome.userTreeChanges).toEqual(['src/imp.ts']);
+    expect(await readApp(app, 'src/imp.ts')).toBe("import x from 'new-pkg';\n");
+
+    const state = parseYaml(await readFile(join(app, '.hex', 'upgrade-state.yaml'), 'utf8')) as {
+      user_tree_changes: string[];
+    };
+    expect(state.user_tree_changes).toEqual(['src/imp.ts']);
+  });
+});

@@ -17,6 +17,14 @@ import { createSandbox } from '../hooks/sandbox.js';
  * the user's working copy — so the upgrade engine's diff stays
  * deterministic.
  *
+ * The one exception is the **user-tree escape hatch** (M11.6): a
+ * migration may declare itself a user-tree migration, which routes it
+ * against the user's working copy instead. A declarative migration opts
+ * in with `user_tree: true`; a JS migration opts in via the `.user.js`
+ * extension (a bare `.js` file carries no schema to hang a flag on).
+ * The upgrade engine — not this module — decides which tree a migration
+ * runs against; this module just reports `userTree` from discovery.
+ *
  * The chain walker (M11.2) calls one migration per hop; this module
  * discovers, parses, and runs it. How the result feeds the 3-way merge
  * is M11.4 — `applyMigration` reports the structural changes it made
@@ -41,15 +49,29 @@ const migrationOpSchema = z.union([
   z.object({ replace: fromTo }).strict(),
 ]);
 
-/** A declarative migration document: an ordered list of ops. */
-export const migrationDocSchema = z.object({ steps: z.array(migrationOpSchema).min(1) }).strict();
+/**
+ * A declarative migration document: an ordered list of ops, plus the
+ * optional `user_tree` escape-hatch flag (M11.6). When `user_tree` is
+ * true the engine runs the ops against the user's working copy.
+ */
+export const migrationDocSchema = z
+  .object({
+    user_tree: z.boolean().optional(),
+    steps: z.array(migrationOpSchema).min(1),
+  })
+  .strict();
 
 export type MigrationOp = z.infer<typeof migrationOpSchema>;
+export type MigrationDoc = z.infer<typeof migrationDocSchema>;
 
-/** Where a migration for a given hop was found, and in what form. */
+/**
+ * Where a migration for a given hop was found, in what form, and whether
+ * it is a user-tree migration. `doc` is carried on declarative results
+ * so a caller need not re-read and re-parse the file.
+ */
 export type DiscoveredMigration =
-  | { kind: 'declarative'; path: string }
-  | { kind: 'js'; path: string }
+  | { kind: 'declarative'; path: string; userTree: boolean; doc: MigrationDoc }
+  | { kind: 'js'; path: string; userTree: boolean }
   | null;
 
 /** Structural changes a migration made — consumed by the M11.4 merge. */
@@ -63,7 +85,7 @@ export type MigrationResult = {
 };
 
 export type MigrationContext = {
-  /** The pristine tree the migration transforms. */
+  /** The tree the migration transforms — pristine, or the user's copy. */
   treeDir: string;
   /**
    * Whether the user has edited `relPath` since generation. Consulted by
@@ -83,7 +105,8 @@ function migrationStem(from: string, to: string): string {
  * Find the migration file for the `from`→`to` hop in `migrationsDir`.
  * Returns null when none exists — a hop without a migration is allowed
  * (the version bump simply had no structural change). A declarative and
- * a JS file for the same hop is an authoring error.
+ * a JS file for the same hop is an authoring error, as is shipping both
+ * the pristine (`.js`) and user-tree (`.user.js`) JS forms.
  */
 export async function discoverMigration(
   migrationsDir: string,
@@ -92,20 +115,36 @@ export async function discoverMigration(
 ): Promise<DiscoveredMigration> {
   const stem = migrationStem(from, to);
   const declarative = await firstExisting(migrationsDir, [`${stem}.yaml`, `${stem}.yml`]);
-  const js = await firstExisting(migrationsDir, [`${stem}.js`]);
-  if (declarative && js) {
+  const pristineJs = await firstExisting(migrationsDir, [`${stem}.js`]);
+  const userJs = await firstExisting(migrationsDir, [`${stem}.user.js`]);
+
+  if (declarative && (pristineJs || userJs)) {
     throw new MigrationError(
       `hop ${from}→${to} has both a declarative and a JS migration — keep one`,
     );
   }
-  if (declarative) return { kind: 'declarative', path: declarative };
-  if (js) return { kind: 'js', path: js };
+  if (pristineJs && userJs) {
+    throw new MigrationError(
+      `hop ${from}→${to} has both a \`.js\` and a \`.user.js\` migration — keep one`,
+    );
+  }
+
+  if (declarative) {
+    const doc = await parseDeclarative(declarative);
+    return { kind: 'declarative', path: declarative, userTree: doc.user_tree ?? false, doc };
+  }
+  if (userJs) return { kind: 'js', path: userJs, userTree: true };
+  if (pristineJs) return { kind: 'js', path: pristineJs, userTree: false };
   return null;
 }
 
 /**
  * Discover and run the migration for one upgrade hop against `treeDir`.
  * A missing migration is a clean no-op (`applied: false`).
+ *
+ * Note: the *caller* picks `ctx.treeDir` — the pristine tree for a
+ * normal migration, the user's working copy for a user-tree one. This
+ * function does not route; it runs the discovered migration as told.
  */
 export async function applyMigration(
   migrationsDir: string,
@@ -115,21 +154,25 @@ export async function applyMigration(
 ): Promise<MigrationResult> {
   const found = await discoverMigration(migrationsDir, from, to);
   if (!found) return { applied: false, renames: [], deletes: [] };
-
-  if (found.kind === 'js') {
-    await runJsMigration(found.path, from, to, ctx);
-    return { applied: true, renames: [], deletes: [] };
-  }
-  return runDeclarativeMigration(found.path, from, to, ctx);
+  return runDiscoveredMigration(found, from, to, ctx);
 }
 
-/** Parse and execute a declarative migration document. */
-async function runDeclarativeMigration(
-  path: string,
+/** Run an already-discovered migration against `ctx.treeDir`. */
+export async function runDiscoveredMigration(
+  found: NonNullable<DiscoveredMigration>,
   from: string,
   to: string,
   ctx: MigrationContext,
 ): Promise<MigrationResult> {
+  if (found.kind === 'js') {
+    await runJsMigration(found.path, from, to, ctx);
+    return { applied: true, renames: [], deletes: [] };
+  }
+  return runDeclarativeMigration(found.doc, from, to, ctx);
+}
+
+/** Read, parse, and schema-check a declarative migration document. */
+async function parseDeclarative(path: string): Promise<MigrationDoc> {
   let raw: string;
   try {
     raw = await readFile(path, 'utf8');
@@ -151,11 +194,20 @@ async function runDeclarativeMigration(
       .join('\n');
     throw new MigrationError(`migration ${path}: schema validation failed:\n${issues}`);
   }
+  return parsed.data;
+}
 
+/** Execute a parsed declarative migration document against `ctx.treeDir`. */
+async function runDeclarativeMigration(
+  doc: MigrationDoc,
+  from: string,
+  to: string,
+  ctx: MigrationContext,
+): Promise<MigrationResult> {
   const isModified = ctx.isUserModified ?? (() => false);
   const result: MigrationResult = { applied: true, renames: [], deletes: [] };
 
-  for (const op of parsed.data.steps) {
+  for (const op of doc.steps) {
     if ('delete' in op) {
       await deletePath(ctx.treeDir, op.delete, from, to);
       result.deletes.push(op.delete);
@@ -176,7 +228,7 @@ async function runDeclarativeMigration(
   return result;
 }
 
-/** Remove `rel` from the pristine tree; a missing target is an authoring error. */
+/** Remove `rel` from the tree; a missing target is an authoring error. */
 async function deletePath(treeDir: string, rel: string, from: string, to: string): Promise<void> {
   const abs = join(treeDir, rel);
   if (!(await pathExists(abs))) {
@@ -185,7 +237,7 @@ async function deletePath(treeDir: string, rel: string, from: string, to: string
   await rm(abs, { recursive: true, force: true });
 }
 
-/** Move `from`→`to` within the pristine tree. */
+/** Move `from`→`to` within the tree. */
 async function movePath(
   treeDir: string,
   fromRel: string,
@@ -207,8 +259,8 @@ async function movePath(
 
 /**
  * Run a `.js` migration inside the M7 sandbox. The script gets the same
- * `project` filesystem facade JS hooks use — scoped to the pristine tree
- * — plus a `log` sink and a `migration` global naming the hop.
+ * `project` filesystem facade JS hooks use — scoped to `ctx.treeDir` —
+ * plus a `log` sink and a `migration` global naming the hop.
  */
 async function runJsMigration(
   path: string,

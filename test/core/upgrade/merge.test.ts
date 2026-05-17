@@ -183,6 +183,7 @@ describe('upgrade state file', () => {
       from: '1.0.0',
       to: '2.0.0',
       conflicts: ['src/index.ts', 'package.json'],
+      user_tree_changes: [],
     });
   });
 
