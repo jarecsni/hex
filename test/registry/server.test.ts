@@ -47,7 +47,6 @@ async function startRegistry(tokens: TokenStore): Promise<Harness> {
     storeDir,
     marketplacePrivateKeyPem: keys.privateKeyPem,
     tokens,
-    assetsDir: join(process.cwd(), 'registry', 'assets'),
   };
   const server = createRegistryServer(config);
   await new Promise<void>((resolve) => server.listen(0, resolve));
@@ -211,12 +210,13 @@ describe('registry server — website', () => {
     }
   });
 
-  it('serves the vendored hx.js asset', async () => {
+  it('serves htmx from the htmx.org dependency', async () => {
     const reg = await startRegistry(new Map());
     try {
-      const res = await fetch(`${reg.baseUrl}/assets/hx.js`);
+      const res = await fetch(`${reg.baseUrl}/assets/htmx.min.js`);
       expect(res.status).toBe(200);
       expect(res.headers.get('content-type')).toMatch(/javascript/);
+      expect((await res.text()).length).toBeGreaterThan(1000);
     } finally {
       await reg.close();
     }

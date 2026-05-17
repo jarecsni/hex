@@ -99,7 +99,7 @@ M9.9 acceptance asks for. The `test/registry/server.test.ts`
 | `GET /packages/<file>.hexpkg`  | A signed package archive                 |
 | `POST /publish`                | Authenticated publish (Bearer token)     |
 | `GET /` · `/search` · `/browse` · `/p/<name>` | The website            |
-| `GET /assets/hx.js`            | Vendored live-search script              |
+| `GET /assets/htmx.min.js`      | htmx (the `htmx.org` dependency)         |
 
 ## Out of scope (per the M9.9 ticket)
 

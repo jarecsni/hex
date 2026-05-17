@@ -1,6 +1,7 @@
 import { readFile } from 'node:fs/promises';
 import { type IncomingMessage, type Server, type ServerResponse, createServer } from 'node:http';
-import { join } from 'node:path';
+import { createRequire } from 'node:module';
+import { dirname, join } from 'node:path';
 import { AuthError, type TokenStore, authenticatePublish, loadTokens } from './auth.js';
 import { PublishError, publishPackage } from './publish.js';
 import {
@@ -47,11 +48,20 @@ export type RegistryServerConfig = {
   marketplacePrivateKeyPem: string;
   /** Publish token → publisher map. */
   tokens: TokenStore;
-  /** Directory holding static web assets (htmx.min.js). */
-  assetsDir: string;
 };
 
 const NAME_SEGMENT_RE = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
+
+/**
+ * Path to htmx, resolved from the `htmx.org` dependency — served at
+ * `/assets/htmx.min.js`, never loaded from a third-party CDN (a
+ * marketplace must not hand its visitors a script it doesn't control).
+ */
+const HTMX_PATH = join(
+  dirname(createRequire(import.meta.url).resolve('htmx.org/package.json')),
+  'dist',
+  'htmx.min.js',
+);
 
 function send(
   res: ServerResponse,
@@ -154,9 +164,9 @@ export function createRegistryServer(config: RegistryServerConfig): Server {
     }
 
     // ── static assets ─────────────────────────────────────────────────
-    if (path === '/assets/hx.js') {
+    if (path === '/assets/htmx.min.js') {
       try {
-        const js = await readFile(join(config.assetsDir, 'hx.js'));
+        const js = await readFile(HTMX_PATH);
         return send(res, 200, 'application/javascript', js);
       } catch {
         return send(res, 404, 'text/plain', 'asset not found');
@@ -244,9 +254,8 @@ async function main(): Promise<void> {
 
   const marketplacePrivateKeyPem = await readFile(keyPath, 'utf8');
   const tokens = await loadTokens(tokensPath);
-  const assetsDir = join(import.meta.dirname, 'assets');
 
-  const server = createRegistryServer({ storeDir, marketplacePrivateKeyPem, tokens, assetsDir });
+  const server = createRegistryServer({ storeDir, marketplacePrivateKeyPem, tokens });
   server.listen(port, () => {
     process.stdout.write(`hex-registry listening on :${port} (store: ${storeDir})\n`);
   });

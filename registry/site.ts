@@ -5,11 +5,10 @@ import type { CataloguePackage } from './store.js';
  * detail pages, server-rendered HTML with live search.
  *
  * Progressive enhancement: every page works as plain HTML with forms
- * and links and no JavaScript. `/assets/hx.js` (a tiny vendored
- * htmx-attribute-compatible shim) upgrades search to update results
- * without a full reload; the search endpoint returns a fragment to
- * `HX-Request` calls and a full page otherwise — see `server.ts`.
- * Dropping the real `htmx.min.js` in place of `hx.js` is a no-op swap.
+ * and links and no JavaScript. HTMX (the `htmx.org` dependency, served
+ * from `/assets/htmx.min.js` — never a third-party CDN) upgrades search
+ * to update results without a full reload; the search endpoint returns
+ * a fragment to `HX-Request` calls and a full page otherwise.
  *
  * These functions are pure: data in, HTML string out.
  */
@@ -61,7 +60,7 @@ export function layout(title: string, body: string): string {
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>${escapeHtml(title)} — Hex marketplace</title>
 <style>${STYLE}</style>
-<script src="/assets/hx.js" defer></script>
+<script src="/assets/htmx.min.js" defer></script>
 </head>
 <body>
 <header>
