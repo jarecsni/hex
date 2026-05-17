@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
-import { mkdir, readFile, readdir, writeFile } from 'node:fs/promises';
-import { join, relative, sep } from 'node:path';
-import { stringify as stringifyYaml } from 'yaml';
+import { mkdir, readFile, readdir, stat, writeFile } from 'node:fs/promises';
+import { dirname, join, relative, resolve, sep } from 'node:path';
+import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
 import type { z } from 'zod';
 import { VERSION } from '../../brand/splash.js';
 import type { ChildRef } from '../manifest/types.js';
@@ -136,6 +136,141 @@ export async function writeLockfile(outputDir: string, lockfile: Lockfile): Prom
   const path = join(dir, LOCKFILE_FILENAME);
   await writeFile(path, stringifyYaml(parsed.data), 'utf8');
   return path;
+}
+
+/** A lockfile loaded from disk, with where it was found. */
+export type LoadedLockfile = {
+  /** Filesystem path to the `.hex/lockfile.yaml` file. */
+  path: string;
+  /** Directory holding the `.hex/` folder — the generated app root. */
+  rootDir: string;
+  lockfile: Lockfile;
+};
+
+/**
+ * Walk upward from `startDir` looking for `.hex/lockfile.yaml`, stopping
+ * at the filesystem root. Returns null if none is found.
+ *
+ * Same convention as `readChecklistUpward` — lets `hex doctor` (M10.4)
+ * and the M11 upgrade engine work from any subdirectory of a generated
+ * app, the way `git` / `npm` find their roots.
+ */
+export async function readLockfileUpward(startDir: string): Promise<LoadedLockfile | null> {
+  let dir = resolve(startDir);
+  while (true) {
+    const candidate = join(dir, LOCKFILE_DIRNAME, LOCKFILE_FILENAME);
+    if (await isFile(candidate)) {
+      return { path: candidate, rootDir: dir, lockfile: await readLockfileFile(candidate) };
+    }
+    const parent = dirname(dir);
+    if (parent === dir) return null;
+    dir = parent;
+  }
+}
+
+/**
+ * The outcome of an integrity check. `modified` / `missing` / `added`
+ * are POSIX-relative paths; `ok` is true only when all three are empty.
+ */
+export type LockfileIntegrity = {
+  /** True when nothing has diverged from the lockfile's record. */
+  ok: boolean;
+  /** Recorded files whose current bytes differ from the lockfile. */
+  modified: string[];
+  /** Recorded files no longer present in the tree. */
+  missing: string[];
+  /** Files present in the tree but absent from the lockfile. */
+  added: string[];
+};
+
+/**
+ * Compare a generated app's current tree against a lockfile's recorded
+ * hashes. **Never throws** — it returns the divergence so the caller
+ * (M11's pristine reconstruction, `hex doctor`) decides whether to
+ * merge, warn, or proceed.
+ *
+ * The walk excludes `.hex/`, `.git/`, and `node_modules/`, matching
+ * `buildLockfile` exactly so the comparison stays apples-to-apples.
+ */
+export async function checkLockfileIntegrity(
+  rootDir: string,
+  lockfile: Lockfile,
+): Promise<LockfileIntegrity> {
+  const current = new Map((await hashRenderedTree(rootDir)).map((e) => [e.path, e.sha256]));
+  const recorded = new Map(lockfile.files.map((e) => [e.path, e.sha256]));
+
+  const modified: string[] = [];
+  const missing: string[] = [];
+  for (const [path, sha] of recorded) {
+    const cur = current.get(path);
+    if (cur === undefined) missing.push(path);
+    else if (cur !== sha) modified.push(path);
+  }
+  const added: string[] = [];
+  for (const path of current.keys()) {
+    if (!recorded.has(path)) added.push(path);
+  }
+  modified.sort();
+  missing.sort();
+  added.sort();
+  return {
+    ok: modified.length === 0 && missing.length === 0 && added.length === 0,
+    modified,
+    missing,
+    added,
+  };
+}
+
+/** Read, version-check, and schema-validate a lockfile at a known path. */
+async function readLockfileFile(path: string): Promise<Lockfile> {
+  let raw: string;
+  try {
+    raw = await readFile(path, 'utf8');
+  } catch (err) {
+    throw new LockfileError(`cannot read lockfile: ${errMsg(err)}`, path);
+  }
+
+  let data: unknown;
+  try {
+    data = parseYaml(raw);
+  } catch (err) {
+    throw new LockfileError(`invalid YAML: ${errMsg(err)}`, path);
+  }
+
+  // Check the version *before* full schema validation: a future-version
+  // file may use shapes this build's schema rejects, and a clear upgrade
+  // hint beats a wall of schema issues.
+  if (typeof data === 'object' && data !== null) {
+    const version = (data as { schema_version?: unknown }).schema_version;
+    if (typeof version === 'number' && version > LOCKFILE_SCHEMA_VERSION) {
+      throw new LockfileError(
+        `lockfile schema_version ${version} is newer than this build of Hex supports ` +
+          `(max ${LOCKFILE_SCHEMA_VERSION}) — upgrade Hex to read it`,
+        path,
+      );
+    }
+  }
+
+  const result = lockfileSchema.safeParse(data);
+  if (!result.success) {
+    const issues = result.error.issues
+      .map((i) => `  ${i.path.join('.') || '<root>'}: ${i.message}`)
+      .join('\n');
+    throw new LockfileError(`schema validation failed:\n${issues}`, path);
+  }
+  return result.data;
+}
+
+async function isFile(path: string): Promise<boolean> {
+  try {
+    return (await stat(path)).isFile();
+  } catch {
+    return false;
+  }
+}
+
+function errMsg(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
 }
 
 /** Identity + source spec of one artifact (the root, or a child via `ref`). */
