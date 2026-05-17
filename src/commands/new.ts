@@ -8,6 +8,7 @@ import { checklistFromTasks, writeChecklist } from '../core/checklist/index.js';
 import { loadConfig } from '../core/config/load.js';
 import type { HexConfig } from '../core/config/types.js';
 import { type TemplateEntry, discoverTemplates } from '../core/discovery/index.js';
+import { buildLockfile, writeLockfile } from '../core/lockfile/index.js';
 import type { SetupTask } from '../core/manifest/types.js';
 import { createClackPrompter } from '../core/prompts/clack-prompter.js';
 import { runPrompts } from '../core/prompts/engine.js';
@@ -89,33 +90,45 @@ export async function executeNewRender(
   ctx: NewContext,
   opts: { force: boolean; prompter?: Prompter; trustLocal?: boolean },
 ): Promise<NewRenderSummary> {
+  let summary: NewRenderSummary;
   if (ctx.resolved) {
     const result = await renderRecipe(ctx.resolved, outputDir, ctx.answers, {
       force: opts.force,
       prompter: opts.prompter,
       trustLocal: opts.trustLocal,
     });
-    const counts = summariseRecipeRender(result);
-    return {
-      ...counts,
+    summary = {
+      ...summariseRecipeRender(result),
       childCount: ctx.resolved.children.size,
       tasks: aggregateRecipeSetup(ctx.resolved),
       setupMessage: bundle.manifest.setup?.message,
     };
+  } else {
+    const result = await renderBundle(bundle, outputDir, ctx.answers, {
+      force: opts.force,
+      prompter: opts.prompter,
+      trustLocal: opts.trustLocal,
+    });
+    summary = {
+      written: result.written.length,
+      renamed: result.renamed.length,
+      deleted: result.deleted.length,
+      childCount: 0,
+      tasks: bundle.manifest.setup?.tasks ?? [],
+      setupMessage: bundle.manifest.setup?.message,
+    };
   }
-  const result = await renderBundle(bundle, outputDir, ctx.answers, {
-    force: opts.force,
-    prompter: opts.prompter,
-    trustLocal: opts.trustLocal,
-  });
-  return {
-    written: result.written.length,
-    renamed: result.renamed.length,
-    deleted: result.deleted.length,
-    childCount: 0,
-    tasks: bundle.manifest.setup?.tasks ?? [],
-    setupMessage: bundle.manifest.setup?.message,
-  };
+
+  // M10.2: write `.hex/lockfile.yaml` — the generated app's
+  // self-describing record. Hashed from the tree on disk, so the
+  // file-hash table reflects the true post-hooks, post-render state.
+  // Done for both archetypes; no `if (recipe)` branch.
+  await writeLockfile(
+    outputDir,
+    await buildLockfile({ bundle, resolved: ctx.resolved, answers: ctx.answers, outputDir }),
+  );
+
+  return summary;
 }
 
 type RenderCounts = { written: number; renamed: number; deleted: number };

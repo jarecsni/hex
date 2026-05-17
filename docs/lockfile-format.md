@@ -17,8 +17,8 @@ The lockfile records exactly the `{recipe, components+versions, answers,
 hashes}` set `idea.md` §11 calls "enough to reconstruct `pristine_old`"
 — the input the upgrade engine re-renders to compute a patch.
 
-This page is the format spec. M10.1 defines the schema; M10.2 writes the
-file; M10.3 reads it and verifies integrity.
+This page is the format spec. M10.1 defined the schema; M10.2 writes the
+file at the end of `hex new`; M10.3 reads it and verifies integrity.
 
 ## Shape
 
@@ -95,7 +95,26 @@ generation: re-hash the current tree, compare against the recorded
 digests, and any mismatch is a file that diverged. The upgrade engine
 uses that to decide whether to merge cleanly or surface a conflict.
 
-## Out of scope for M10.1
+## Writing the lockfile (M10.2)
 
-Writing the file (M10.2), reading it back, and integrity verification
-(M10.3). M10.1 is the schema and this spec only.
+`hex new` writes `.hex/lockfile.yaml` at the end of its render path, for
+both archetypes — no `if (recipe)` branch. The `files` table is hashed
+from the rendered tree **on disk**, after hooks have run, so renames and
+deletes are reflected faithfully. `.hex/`, `.git/`, and `node_modules/`
+are excluded from the walk: the first is Hex's own metadata (hashing it
+would make the table describe itself), the others are not part of the
+rendered artifact.
+
+Source specs are recorded as precisely as the render pipeline exposes:
+a `git:` child reference carries its upstream coordinate verbatim;
+`file:` references, bare `name`/`slot` references, and the root bundle
+are recorded as the resolved local path they loaded from.
+
+**Known limitation.** Only a recipe's *immediate* children are recorded.
+A nested recipe's own descendants are not yet captured — tracked for the
+M11 upgrade engine, which needs the full tree for pristine
+reconstruction.
+
+## Out of scope for M10.2
+
+Reading the lockfile back and integrity verification — that is M10.3.
