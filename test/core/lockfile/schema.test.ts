@@ -117,6 +117,29 @@ describe('lockfileSchema — shape', () => {
   });
 });
 
+describe('lockfileSchema — nested children', () => {
+  it('accepts a recipe child carrying its own children', () => {
+    const lock = validRecipeLockfile({
+      children: [{ ...validChild(), key: 'platform', type: 'recipe', children: [validChild()] }],
+    });
+    expect(lockfileSchema.safeParse(lock).success).toBe(true);
+  });
+
+  it('validates recursively — a malformed grandchild is rejected', () => {
+    const lock = validRecipeLockfile({
+      children: [
+        {
+          ...validChild(),
+          key: 'platform',
+          type: 'recipe',
+          children: [{ ...validChild(), key: 'Bad_Key' }],
+        },
+      ],
+    });
+    expect(lockfileSchema.safeParse(lock).success).toBe(false);
+  });
+});
+
 describe('lockfileSchema — tampered hashes', () => {
   it('rejects a sha256 that is not 64 lowercase hex characters', () => {
     for (const bad of ['', 'abc', HASH_A.toUpperCase(), `${HASH_A}f`, 'z'.repeat(64)]) {

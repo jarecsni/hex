@@ -69,16 +69,37 @@ export const lockArtifactSchema = z.object({
   source: sourceSpecSchema,
 });
 
-/** A recipe's composed child — an artifact plus its slot key + stub flag. */
-export const lockChildSchema = lockArtifactSchema.extend({
-  /** The recipe's `composes:` slot key this child filled. */
-  key: z
-    .string()
-    .min(1)
-    .regex(KEBAB_KEY_RE, 'child key must be kebab-case ([a-z0-9-], no leading/trailing dash)'),
-  /** Whether this child was rendered in stub mode (`idea.md` §6). */
-  stub: z.boolean(),
-});
+/** Identity + source spec of one scaffolding artifact. */
+export type LockArtifact = z.infer<typeof lockArtifactSchema>;
+
+/**
+ * A recipe's composed child — an artifact plus its `composes:` slot key,
+ * stub flag, and, when the child is *itself a recipe*, its own composed
+ * children. The tree is recorded recursively so the M11 upgrade engine
+ * has the whole shape it needs to reconstruct `pristine_old`.
+ *
+ * `children` is omitted entirely for a component child (a leaf); a
+ * recipe child carries its descendants.
+ */
+export type LockChild = LockArtifact & {
+  key: string;
+  stub: boolean;
+  children?: LockChild[];
+};
+
+export const lockChildSchema: z.ZodType<LockChild> = z.lazy(() =>
+  lockArtifactSchema.extend({
+    /** The recipe's `composes:` slot key this child filled. */
+    key: z
+      .string()
+      .min(1)
+      .regex(KEBAB_KEY_RE, 'child key must be kebab-case ([a-z0-9-], no leading/trailing dash)'),
+    /** Whether this child was rendered in stub mode (`idea.md` §6). */
+    stub: z.boolean(),
+    /** A recipe child's own composed children; absent for a component. */
+    children: z.array(lockChildSchema).optional(),
+  }),
+);
 
 /** One rendered file and the sha256 of its bytes at generation time. */
 export const lockFileEntrySchema = z.object({

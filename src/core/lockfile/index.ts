@@ -10,8 +10,8 @@ import type { ResolvedRecipe } from '../recipe/resolve.js';
 import type { ComponentBundle } from '../sources/file-source.js';
 import {
   LOCKFILE_SCHEMA_VERSION,
-  type lockArtifactSchema,
-  type lockChildSchema,
+  type LockArtifact,
+  type LockChild,
   type lockFileEntrySchema,
   lockfileSchema,
   type sourceSpecSchema,
@@ -30,15 +30,10 @@ import {
  */
 
 export { LOCKFILE_SCHEMA_VERSION, SHA256_RE, lockfileSchema } from './schema.js';
+export type { LockArtifact, LockChild } from './schema.js';
 
 /** How to re-fetch an artifact during an upgrade. */
 export type SourceSpec = z.infer<typeof sourceSpecSchema>;
-
-/** Identity of one scaffolding artifact — the recipe root or a child. */
-export type LockArtifact = z.infer<typeof lockArtifactSchema>;
-
-/** A recipe's composed child. */
-export type LockChild = z.infer<typeof lockChildSchema>;
 
 /** One rendered file and the sha256 of its bytes at generation time. */
 export type LockFileEntry = z.infer<typeof lockFileEntrySchema>;
@@ -86,37 +81,40 @@ export type BuildLockfileInput = {
 
 /**
  * Assemble a `Lockfile` describing a finished render: the root artifact,
- * its immediate composed children, the answers tree, and a per-file
- * sha256 table hashed from the rendered tree on disk — post-hooks,
- * post-render, so hook renames/deletes are reflected faithfully.
- *
- * Only the recipe's *immediate* children are recorded; a nested recipe's
- * own descendants are not yet captured (tracked for the M11 upgrade
- * engine, which needs the full tree for pristine reconstruction).
+ * its composed children recorded recursively (a nested recipe carries
+ * its own descendants), the answers tree, and a per-file sha256 table
+ * hashed from the rendered tree on disk — post-hooks, post-render, so
+ * hook renames/deletes are reflected faithfully.
  */
 export async function buildLockfile(input: BuildLockfileInput): Promise<Lockfile> {
   const { bundle, resolved, answers, outputDir } = input;
-
-  const children: LockChild[] = [];
-  if (resolved) {
-    for (const child of resolved.children.values()) {
-      children.push({
-        ...artifactOf(child.bundle, child.ref),
-        key: child.key,
-        stub: child.ref.stub === true,
-      });
-    }
-  }
 
   return {
     schema_version: LOCKFILE_SCHEMA_VERSION,
     hex_version: VERSION,
     generated_at: (input.now ?? new Date()).toISOString(),
     root: artifactOf(bundle),
-    children,
+    children: resolved ? lockChildrenOf(resolved) : [],
     answers,
     files: await hashRenderedTree(outputDir),
   };
+}
+
+/**
+ * Map a resolved recipe's children to `LockChild` records, recursing
+ * into any child that is itself a recipe so the whole composition tree
+ * is captured. A leaf (component) child carries no `children` key.
+ */
+function lockChildrenOf(resolved: ResolvedRecipe): LockChild[] {
+  return [...resolved.children.values()].map((child) => {
+    const nested = child.resolved ? lockChildrenOf(child.resolved) : [];
+    return {
+      ...artifactOf(child.bundle, child.ref),
+      key: child.key,
+      stub: child.ref.stub === true,
+      ...(nested.length > 0 ? { children: nested } : {}),
+    };
+  });
 }
 
 /**

@@ -63,7 +63,7 @@ files:
 | `hex_version`    | The Hex build that wrote the file. Informational. Optional.      |
 | `generated_at`   | ISO-8601 render timestamp. Informational. Optional.              |
 | `root`           | The recipe — or, for a standalone-component scaffold, the component itself. The engine has no `if (recipe)` branch (`idea.md`, "two archetypes, one engine"), so a component is just a `root` with no `children`. |
-| `children`       | The recipe's composed children, one per `composes:` slot. Empty for a standalone component. |
+| `children`       | The recipe's composed children, one per `composes:` slot, recorded **recursively** — a child that is itself a recipe carries its own `children`. Empty for a standalone component. |
 | `answers`        | The full answers tree exactly as the render consumed it — including per-child and per-hook answers (`idea.md` §5). `stub: true` lives here too, as an ordinary stored answer. |
 | `files`          | Per-file content hashes of the rendered tree, sorted by `path`.  |
 
@@ -71,7 +71,9 @@ files:
 
 `name` + `version` + `type` (`component` \| `recipe`), plus a `source`
 spec — *how to re-fetch this exact artifact* during an upgrade. A child
-additionally carries its `composes:` slot `key` and a `stub` flag.
+additionally carries its `composes:` slot `key` and a `stub` flag, and —
+when the child is itself a recipe — its own nested `children`. A
+component child (a leaf) omits `children` entirely.
 
 ### Source spec
 
@@ -105,15 +107,15 @@ are excluded from the walk: the first is Hex's own metadata (hashing it
 would make the table describe itself), the others are not part of the
 rendered artifact.
 
+The composition tree is recorded **recursively** — a recipe child that
+itself composes other artifacts carries them under its own `children`,
+so the lockfile captures the whole tree, not just the root's immediate
+children.
+
 Source specs are recorded as precisely as the render pipeline exposes:
 a `git:` child reference carries its upstream coordinate verbatim;
 `file:` references, bare `name`/`slot` references, and the root bundle
 are recorded as the resolved local path they loaded from.
-
-**Known limitation.** Only a recipe's *immediate* children are recorded.
-A nested recipe's own descendants are not yet captured — tracked for the
-M11 upgrade engine, which needs the full tree for pristine
-reconstruction.
 
 ## Out of scope for M10.2
 
