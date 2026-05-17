@@ -5,6 +5,12 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { parse as parseYaml } from 'yaml';
 import { checklistFromTasks, writeChecklist } from '../../src/core/checklist/index.js';
+import {
+  buildLockfile,
+  checkLockfileIntegrity,
+  readLockfileUpward,
+  writeLockfile,
+} from '../../src/core/lockfile/index.js';
 import type { Prompter } from '../../src/core/prompts/types.js';
 import { runRecipePrompts } from '../../src/core/recipe/prompts.js';
 import { renderRecipe } from '../../src/core/recipe/render.js';
@@ -263,6 +269,41 @@ describe('recipe pipeline — load → resolve → prompt → render → checkli
     expect(onDisk.tasks.every((t) => t.status === 'pending')).toBe(true);
     // Detail propagated for the one task that declared it.
     expect(onDisk.tasks.find((t) => t.id === 'api-env-file')?.detail).toBe('cp .env.example .env');
+
+    // ── lockfile written via the M10 mechanism ────────────────────────
+    // Dogfood M10: the generated app records what was scaffolded. This is
+    // the wiring `executeNewRender` already performs; the integration
+    // test asserts it describes the M5 reference recipe faithfully.
+    const lockPath = await writeLockfile(
+      out,
+      await buildLockfile({ bundle, resolved, answers, outputDir: out }),
+    );
+    expect(lockPath).toBe(join(out, '.hex', 'lockfile.yaml'));
+    expect(existsSync(lockPath)).toBe(true);
+
+    // Reload from disk — proves the bytes round-trip through the schema.
+    const loaded = await readLockfileUpward(out);
+    if (!loaded) throw new Error('lockfile not found after writeLockfile');
+
+    // Recipe identity + the two children, each with version + stub flag.
+    expect(loaded.lockfile.root).toMatchObject({
+      name: 'demo-app',
+      version: '0.1.0',
+      type: 'recipe',
+    });
+    expect(loaded.lockfile.children.map((c) => c.key)).toEqual(['api', 'web']);
+    expect(loaded.lockfile.children.find((c) => c.key === 'api')).toMatchObject({
+      name: 'api',
+      version: '0.1.0',
+      type: 'component',
+      stub: false,
+    });
+    // The answers tree matches what the render actually consumed.
+    expect(loaded.lockfile.answers).toEqual(answers);
+
+    // Integrity of the freshly-rendered tree is clean — nothing diverged.
+    const integrity = await checkLockfileIntegrity(out, loaded.lockfile);
+    expect(integrity).toEqual({ ok: true, modified: [], missing: [], added: [] });
   });
 
   it('skips the checklist when neither recipe nor any child declares setup tasks', async () => {
