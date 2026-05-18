@@ -40,16 +40,31 @@ export const upgradeStateSchema = z.object({
   to: z.string().min(1),
   /** Files left with conflict markers, awaiting user resolution. */
   conflicts: z.array(z.string()),
+  /**
+   * Files a user-tree migration (M11.6) edited directly in the working
+   * copy — recorded so the user can review what an escape-hatch
+   * migration touched. Empty when no user-tree migration ran.
+   */
+  user_tree_changes: z.array(z.string()).default([]),
 });
 
-/** A paused upgrade's recorded state. */
+/** A paused upgrade's recorded state, as read back (defaults applied). */
 export type UpgradeState = z.infer<typeof upgradeStateSchema>;
+
+/**
+ * The shape a caller passes to `writeUpgradeState` — `user_tree_changes`
+ * is optional here (it defaults to `[]`), required on the read-back type.
+ */
+export type UpgradeStateInput = z.input<typeof upgradeStateSchema>;
 
 /**
  * Write `.hex/upgrade-state.yaml` into a generated app. Validates against
  * the schema first, so a buggy caller cannot persist a malformed file.
  */
-export async function writeUpgradeState(rootDir: string, state: UpgradeState): Promise<string> {
+export async function writeUpgradeState(
+  rootDir: string,
+  state: UpgradeStateInput,
+): Promise<string> {
   const parsed = upgradeStateSchema.safeParse(state);
   if (!parsed.success) {
     const issues = parsed.error.issues
